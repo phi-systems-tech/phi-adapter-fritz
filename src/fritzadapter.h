@@ -13,7 +13,7 @@
 
 #include "adapterinterface.h"
 
-namespace phicore {
+namespace phicore::adapter {
 
 class FritzAdapter : public AdapterInterface
 {
@@ -110,4 +110,4 @@ private:
     QString m_routerFirmware;
 };
 
-} // namespace phicore
+} // namespace phicore::adapter

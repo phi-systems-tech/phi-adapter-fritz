@@ -13,7 +13,7 @@
 
 Q_LOGGING_CATEGORY(adapterLog, "phi-core.adapters.fritz")
 
-namespace phicore {
+namespace phicore::adapter {
 
 namespace {
 
@@ -1173,4 +1173,4 @@ QList<FritzAdapter::HostEntry> FritzAdapter::parseHostList(const QByteArray &pay
     return hosts;
 }
 
-} // namespace phicore
+} // namespace phicore::adapter

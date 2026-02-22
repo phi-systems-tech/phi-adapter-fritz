@@ -14,7 +14,7 @@
 
 #include "fritzadapter.h"
 
-namespace phicore {
+namespace phicore::adapter {
 
 namespace {
 
@@ -347,4 +347,4 @@ bool FritzAdapterFactory::parseHostListPath(const QByteArray &payload, QString &
     return false;
 }
 
-} // namespace phicore
+} // namespace phicore::adapter

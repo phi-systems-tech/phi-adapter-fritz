@@ -3,13 +3,13 @@
 
 #include "adapterfactory.h"
 
-namespace phicore {
+namespace phicore::adapter {
 
 class FritzAdapterFactory : public AdapterFactory
 {
     Q_OBJECT
     Q_PLUGIN_METADATA(IID "phicore.AdapterFactory")
-    Q_INTERFACES(phicore::AdapterFactory)
+    Q_INTERFACES(phicore::adapter::AdapterFactory)
 
 public:
     explicit FritzAdapterFactory(QObject *parent = nullptr) : AdapterFactory(parent) {}
@@ -33,4 +33,4 @@ private:
     static bool parseHostListPath(const QByteArray &payload, QString &path, QString &error);
 };
 
-} // namespace phicore
+} // namespace phicore::adapter
