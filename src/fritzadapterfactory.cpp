@@ -35,20 +35,13 @@ QString normalizeMac(const QString &mac)
     return mac.trimmed().toLower();
 }
 
-void applyDefaultFieldScopes(AdapterConfigSchema &schema)
+void addFieldByLegacyScope(AdapterConfigSchema &schema, const AdapterConfigField &field)
 {
-    for (AdapterConfigField &field : schema.fields) {
-        const QString scope = field.meta.value(QStringLiteral("scope")).toString().trimmed().toLower();
-        if (scope == QStringLiteral("factory")
-            || scope == QStringLiteral("instance")
-            || scope == QStringLiteral("both")) {
-            continue;
-        }
-        const bool instanceOnly =
-            (static_cast<int>(field.flags) & static_cast<int>(AdapterConfigFieldFlag::InstanceOnly)) != 0;
-        field.meta.insert(QStringLiteral("scope"),
-                          instanceOnly ? QStringLiteral("instance") : QStringLiteral("both"));
-    }
+    const bool instanceOnly =
+        (static_cast<int>(field.flags) & static_cast<int>(AdapterConfigFieldFlag::InstanceOnly)) != 0;
+    if (!instanceOnly)
+        schema.factory.fields.push_back(field);
+    schema.instance.fields.push_back(field);
 }
 
 AdapterConfigOptionList buildTrackedOptions(const QJsonObject &meta)
@@ -190,8 +183,10 @@ discovery::DiscoveryQueryList FritzAdapterFactory::discoveryQueries() const
 AdapterConfigSchema FritzAdapterFactory::configSchema(const Adapter &info) const
 {
     AdapterConfigSchema schema;
-    schema.title = QStringLiteral("FRITZ!Box");
-    schema.description = QStringLiteral("Connect via TR-064 to track network clients.");
+    schema.factory.title = QStringLiteral("FRITZ!Box");
+    schema.factory.description = QStringLiteral("Connect via TR-064 to track network clients.");
+    schema.instance.title = schema.factory.title;
+    schema.instance.description = schema.factory.description;
 
     AdapterConfigField hostField;
     hostField.key = QStringLiteral("host");
@@ -199,40 +194,40 @@ AdapterConfigSchema FritzAdapterFactory::configSchema(const Adapter &info) const
     hostField.placeholder = QStringLiteral("fritz.box");
     hostField.type = AdapterConfigFieldType::Hostname;
     hostField.flags = AdapterConfigFieldFlag::Required;
-    hostField.meta.insert(QStringLiteral("parentAction"), QStringLiteral("settings"));
-    schema.fields.push_back(hostField);
+    hostField.parentActionId = QStringLiteral("settings");
+    addFieldByLegacyScope(schema, hostField);
 
     AdapterConfigField portField;
     portField.key = QStringLiteral("port");
     portField.label = QStringLiteral("Port");
     portField.type = AdapterConfigFieldType::Port;
     portField.defaultValue = 49000;
-    portField.meta.insert(QStringLiteral("parentAction"), QStringLiteral("settings"));
-    schema.fields.push_back(portField);
+    portField.parentActionId = QStringLiteral("settings");
+    addFieldByLegacyScope(schema, portField);
 
     AdapterConfigField userField;
     userField.key = QStringLiteral("user");
     userField.label = QStringLiteral("Username");
     userField.type = AdapterConfigFieldType::String;
     userField.flags = AdapterConfigFieldFlag::Required;
-    userField.meta.insert(QStringLiteral("parentAction"), QStringLiteral("settings"));
-    schema.fields.push_back(userField);
+    userField.parentActionId = QStringLiteral("settings");
+    addFieldByLegacyScope(schema, userField);
 
     AdapterConfigField pwField;
     pwField.key = QStringLiteral("password");
     pwField.label = QStringLiteral("Password");
     pwField.type = AdapterConfigFieldType::Password;
     pwField.flags = AdapterConfigFieldFlag::Required | AdapterConfigFieldFlag::Secret;
-    pwField.meta.insert(QStringLiteral("parentAction"), QStringLiteral("settings"));
-    schema.fields.push_back(pwField);
+    pwField.parentActionId = QStringLiteral("settings");
+    addFieldByLegacyScope(schema, pwField);
 
     AdapterConfigField pollField;
     pollField.key = QStringLiteral("pollIntervalMs");
     pollField.label = QStringLiteral("Poll interval");
     pollField.type = AdapterConfigFieldType::Integer;
     pollField.defaultValue = 5000;
-    pollField.meta.insert(QStringLiteral("parentAction"), QStringLiteral("settings"));
-    schema.fields.push_back(pollField);
+    pollField.parentActionId = QStringLiteral("settings");
+    addFieldByLegacyScope(schema, pollField);
 
     AdapterConfigField retryField;
     retryField.key = QStringLiteral("retryIntervalMs");
@@ -240,8 +235,8 @@ AdapterConfigSchema FritzAdapterFactory::configSchema(const Adapter &info) const
     retryField.description = QStringLiteral("Reconnect interval while the router is offline.");
     retryField.type = AdapterConfigFieldType::Integer;
     retryField.defaultValue = 10000;
-    retryField.meta.insert(QStringLiteral("parentAction"), QStringLiteral("settings"));
-    schema.fields.push_back(retryField);
+    retryField.parentActionId = QStringLiteral("settings");
+    addFieldByLegacyScope(schema, retryField);
 
     AdapterConfigField trackedField;
     trackedField.key = QStringLiteral("trackedMacs");
@@ -252,10 +247,9 @@ AdapterConfigSchema FritzAdapterFactory::configSchema(const Adapter &info) const
     trackedField.options = buildTrackedOptions(info.meta);
     trackedField.actionId = QStringLiteral("browseHosts");
     trackedField.actionLabel = QStringLiteral("Browse WLAN");
-    trackedField.meta.insert(QStringLiteral("parentAction"), QStringLiteral("settings"));
-    schema.fields.push_back(trackedField);
+    trackedField.parentActionId = QStringLiteral("settings");
+    addFieldByLegacyScope(schema, trackedField);
 
-    applyDefaultFieldScopes(schema);
     return schema;
 }
 
