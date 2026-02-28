@@ -35,15 +35,6 @@ QString normalizeMac(const QString &mac)
     return mac.trimmed().toLower();
 }
 
-void addFieldByLegacyScope(AdapterConfigSchema &schema, const AdapterConfigField &field)
-{
-    const bool instanceOnly =
-        (static_cast<int>(field.flags) & static_cast<int>(AdapterConfigFieldFlag::InstanceOnly)) != 0;
-    if (!instanceOnly)
-        schema.factory.fields.push_back(field);
-    schema.instance.fields.push_back(field);
-}
-
 AdapterConfigOptionList buildTrackedOptions(const QJsonObject &meta)
 {
     AdapterConfigOptionList options;
@@ -147,7 +138,7 @@ AdapterCapabilities FritzAdapterFactory::capabilities() const
     AdapterActionDescriptor settings;
     settings.id = QStringLiteral("settings");
     settings.label = QStringLiteral("Settings");
-    settings.description = QStringLiteral("Edit tracked devices and router options.");
+    settings.description = QStringLiteral("Edit tracked devices.");
     settings.hasForm = true;
     settings.meta.insert(QStringLiteral("placement"), QStringLiteral("card"));
     settings.meta.insert(QStringLiteral("kind"), QStringLiteral("open_dialog"));
@@ -194,40 +185,35 @@ AdapterConfigSchema FritzAdapterFactory::configSchema(const Adapter &info) const
     hostField.placeholder = QStringLiteral("fritz.box");
     hostField.type = AdapterConfigFieldType::Hostname;
     hostField.flags = AdapterConfigFieldFlag::Required;
-    hostField.parentActionId = QStringLiteral("settings");
-    addFieldByLegacyScope(schema, hostField);
+    schema.factory.fields.push_back(hostField);
 
     AdapterConfigField portField;
     portField.key = QStringLiteral("port");
     portField.label = QStringLiteral("Port");
     portField.type = AdapterConfigFieldType::Port;
     portField.defaultValue = 49000;
-    portField.parentActionId = QStringLiteral("settings");
-    addFieldByLegacyScope(schema, portField);
+    schema.factory.fields.push_back(portField);
 
     AdapterConfigField userField;
     userField.key = QStringLiteral("user");
     userField.label = QStringLiteral("Username");
     userField.type = AdapterConfigFieldType::String;
     userField.flags = AdapterConfigFieldFlag::Required;
-    userField.parentActionId = QStringLiteral("settings");
-    addFieldByLegacyScope(schema, userField);
+    schema.factory.fields.push_back(userField);
 
     AdapterConfigField pwField;
     pwField.key = QStringLiteral("password");
     pwField.label = QStringLiteral("Password");
     pwField.type = AdapterConfigFieldType::Password;
     pwField.flags = AdapterConfigFieldFlag::Required | AdapterConfigFieldFlag::Secret;
-    pwField.parentActionId = QStringLiteral("settings");
-    addFieldByLegacyScope(schema, pwField);
+    schema.factory.fields.push_back(pwField);
 
     AdapterConfigField pollField;
     pollField.key = QStringLiteral("pollIntervalMs");
     pollField.label = QStringLiteral("Poll interval");
     pollField.type = AdapterConfigFieldType::Integer;
     pollField.defaultValue = 5000;
-    pollField.parentActionId = QStringLiteral("settings");
-    addFieldByLegacyScope(schema, pollField);
+    schema.factory.fields.push_back(pollField);
 
     AdapterConfigField retryField;
     retryField.key = QStringLiteral("retryIntervalMs");
@@ -235,8 +221,7 @@ AdapterConfigSchema FritzAdapterFactory::configSchema(const Adapter &info) const
     retryField.description = QStringLiteral("Reconnect interval while the router is offline.");
     retryField.type = AdapterConfigFieldType::Integer;
     retryField.defaultValue = 10000;
-    retryField.parentActionId = QStringLiteral("settings");
-    addFieldByLegacyScope(schema, retryField);
+    schema.factory.fields.push_back(retryField);
 
     AdapterConfigField trackedField;
     trackedField.key = QStringLiteral("trackedMacs");
@@ -248,7 +233,7 @@ AdapterConfigSchema FritzAdapterFactory::configSchema(const Adapter &info) const
     trackedField.actionId = QStringLiteral("browseHosts");
     trackedField.actionLabel = QStringLiteral("Browse WLAN");
     trackedField.parentActionId = QStringLiteral("settings");
-    addFieldByLegacyScope(schema, trackedField);
+    schema.instance.fields.push_back(trackedField);
 
     return schema;
 }
