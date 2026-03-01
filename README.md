@@ -2,11 +2,11 @@
 
 ## Overview
 
-Integrates a local AVM FRITZ!Box with phi-core.
+Integrates local AVM FRITZ!Box systems with phi-core.
 
 ## Supported Devices / Systems
 
-- AVM FRITZ!Box devices exposing the expected local interface
+- AVM FRITZ!Box devices exposing TR-064 endpoints
 
 ## Cloud Functionality
 
@@ -27,29 +27,41 @@ See `LICENSE`.
 
 ### Purpose
 
-Provides a FRITZ!Box adapter plugin for phi-core.
+Provides local network TR-064 integration for FRITZ!Box via IPC sidecar.
 
 ### Features
 
-- Local endpoint connectivity
-- Authenticated requests
-- Logging category `phi-core.adapters.fritz`
+- IPC sidecar executable using `phi-adapter-sdk`
+- Descriptor-driven config schema (`configSchema`) sent during bootstrap
+- Factory action `probe` (`Test connection`)
+- Instance actions `settings` and `browseHosts`
+- Router channels for uptime, update state, WLAN toggles, TX/RX rates
+- Tracked client devices with connectivity + RSSI updates
 
 ### Runtime Requirements
 
-- phi-core with plugin loading enabled
-- Network access from phi-core host to FRITZ!Box
+- phi-core with IPC adapter runtime enabled
+- Network access to FRITZ!Box endpoint
 
 ### Build Requirements
 
 - `cmake`
 - Qt6 modules: `Core`, `Network`
-- `phi-adapter-api` (local checkout or installed package)
+- `phi-adapter-sdk` (local checkout in `../phi-adapter-sdk` or installed package)
 
 ### Configuration
 
 - No dedicated config file in this repository
-- Runtime settings are provided through phi-core adapter configuration
+- Adapter settings are configured through phi-core
+- Factory scope fields:
+  - `host`
+  - `port` (default `49000`)
+  - `user`
+  - `password`
+  - `pollIntervalMs`
+  - `retryIntervalMs`
+- Instance scope fields:
+  - `trackedMacs` (select list, populated via `browseHosts`)
 
 ### Build
 
@@ -60,14 +72,14 @@ cmake --build build --parallel
 
 ### Installation
 
-- Build output: `build/plugins/adapters/libphi_adapter_fritz.so`
+- Build output: `build/plugins/adapters/phi_adapter_fritz_ipc`
 - Deploy to: `/opt/phi/plugins/adapters/`
 
 ### Troubleshooting
 
-- Error: `401 Unauthorized`
-- Cause: invalid credentials or missing permissions
-- Fix: verify credentials and FRITZ!Box account rights
+- Error: `Invalid credentials`
+- Cause: invalid username/password or missing TR-064 rights
+- Fix: verify FRITZ!Box user permissions and credentials
 
 ### Maintainers
 
