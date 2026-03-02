@@ -1,4 +1,5 @@
 #include <atomic>
+#include <algorithm>
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
@@ -86,6 +87,49 @@ QString normalizeMac(const QString &mac)
     return mac.trimmed().toLower();
 }
 
+QSet<QString> parseTrackedMacSelection(const QJsonValue &value)
+{
+    QSet<QString> out;
+    auto addValue = [&out](const QJsonValue &entry) {
+        QString mac;
+        if (entry.isString()) {
+            mac = normalizeMac(entry.toString());
+        } else if (entry.isObject()) {
+            const QJsonObject obj = entry.toObject();
+            mac = normalizeMac(obj.value(QStringLiteral("value")).toString());
+            if (mac.isEmpty())
+                mac = normalizeMac(obj.value(QStringLiteral("mac")).toString());
+        }
+        if (!mac.isEmpty())
+            out.insert(mac);
+    };
+
+    if (value.isArray()) {
+        const QJsonArray arr = value.toArray();
+        for (const QJsonValue &entry : arr)
+            addValue(entry);
+        return out;
+    }
+
+    addValue(value);
+    return out;
+}
+
+QJsonArray sortedMacArray(const QSet<QString> &macs)
+{
+    QStringList sorted;
+    sorted.reserve(macs.size());
+    for (const QString &mac : macs)
+        sorted.push_back(mac);
+    std::sort(sorted.begin(), sorted.end(), [](const QString &a, const QString &b) {
+        return a.localeAwareCompare(b) < 0;
+    });
+    QJsonArray out;
+    for (const QString &mac : sorted)
+        out.append(mac);
+    return out;
+}
+
 bool isTruthy(const QString &value)
 {
     const QString normalized = value.trimmed().toLower();
@@ -157,22 +201,12 @@ v1::AdapterConfigOptionList buildTrackedOptions(const QJsonObject &meta)
         }
     }
 
-    const QJsonValue trackedValue = meta.value(QStringLiteral("trackedMacs"));
-    if (trackedValue.isArray()) {
-        const QJsonArray arr = trackedValue.toArray();
-        for (const QJsonValue &entry : arr) {
-            if (!entry.isString())
-                continue;
-            const QString mac = normalizeMac(entry.toString());
-            if (mac.isEmpty() || seen.contains(mac))
-                continue;
-            seen.insert(mac);
-            options.push_back({mac.toStdString(), mac.toStdString()});
-        }
-    } else if (trackedValue.isString()) {
-        const QString mac = normalizeMac(trackedValue.toString());
-        if (!mac.isEmpty() && !seen.contains(mac))
-            options.push_back({mac.toStdString(), mac.toStdString()});
+    const QSet<QString> trackedMacs = parseTrackedMacSelection(meta.value(QStringLiteral("trackedMacs")));
+    for (const QString &mac : trackedMacs) {
+        if (mac.isEmpty() || seen.contains(mac))
+            continue;
+        seen.insert(mac);
+        options.push_back({mac.toStdString(), mac.toStdString()});
     }
 
     return options;
@@ -243,7 +277,16 @@ public:
 
         std::cerr << "fritz-ipc config.changed adapterId=" << request.adapterId
                   << " externalId=" << m_info.externalId
-                  << " pluginType=" << m_info.pluginType << '\n';
+                  << " pluginType=" << m_info.pluginType
+                  << " tracked=" << m_trackedMacs.size()
+                  << " known=" << knownHostMapFromMeta(m_meta).size()
+                  << '\n';
+
+        v1::Utf8String descriptorError;
+        if (!sendAdapterDescriptorUpdated(descriptor(), &descriptorError)) {
+            std::cerr << "failed to send adapterDescriptorUpdated(config.changed): "
+                      << descriptorError << '\n';
+        }
 
         setConnected(false);
         pollOnce();
@@ -299,9 +342,9 @@ public:
 
         v1::AdapterActionDescriptor browse;
         browse.id = "browseHosts";
-        browse.label = "Browse WLAN";
+        browse.label = "Probe WLAN";
         browse.description = "Fetch current WLAN/LAN clients";
-        browse.metaJson = R"({"placement":"form_field","kind":"command","requiresAck":true,"reloadStaticConfig":true})";
+        browse.metaJson = R"({"placement":"form_field","kind":"command","requiresAck":true})";
         caps.instanceActions.push_back(browse);
 
         v1::AdapterActionDescriptor settings;
@@ -387,13 +430,25 @@ public:
         if (actionId == QLatin1String("settings")) {
             const QJsonObject params = parseJsonObject(request.paramsJson);
             if (!params.isEmpty()) {
-                for (auto it = params.begin(); it != params.end(); ++it)
+                QJsonObject patch;
+                for (auto it = params.begin(); it != params.end(); ++it) {
+                    if (it.key() == QLatin1String("trackedMacs")) {
+                        const QSet<QString> normalized = parseTrackedMacSelection(it.value());
+                        QJsonArray tracked;
+                        for (const QString &mac : normalized)
+                            tracked.append(mac);
+                        patch.insert(it.key(), tracked);
+                        continue;
+                    }
+                    patch.insert(it.key(), it.value());
+                }
+                for (auto it = patch.begin(); it != patch.end(); ++it)
                     m_meta.insert(it.key(), it.value());
                 m_info.metaJson = toJson(m_meta);
                 refreshConfig();
 
                 v1::Utf8String error;
-                if (!sendAdapterMetaUpdated(toJson(params), &error))
+                if (!sendAdapterMetaUpdated(toJson(patch), &error))
                     std::cerr << "failed to send adapterMetaUpdated(settings): " << error << '\n';
                 if (!sendAdapterDescriptorUpdated(descriptor(), &error))
                     std::cerr << "failed to send adapterDescriptorUpdated(settings): " << error << '\n';
@@ -403,30 +458,48 @@ public:
             }
             resp.status = v1::CmdStatus::Success;
             resp.resultType = v1::ActionResultType::None;
+            resp.reloadLayout = true;
+            resp.formValuesJson = toJson(QJsonObject{
+                {QStringLiteral("trackedMacs"), sortedMacArray(m_trackedMacs)},
+            });
+            QJsonArray trackedChoices;
+            const v1::AdapterConfigOptionList trackedOptions = buildTrackedOptions(m_meta);
+            for (const v1::AdapterConfigOption &option : trackedOptions) {
+                QJsonObject choice;
+                choice.insert(QStringLiteral("value"), QString::fromStdString(option.value));
+                choice.insert(QStringLiteral("label"), QString::fromStdString(option.label));
+                trackedChoices.append(choice);
+            }
+            resp.fieldChoicesJson = toJson(QJsonObject{
+                {QStringLiteral("trackedMacs"), trackedChoices},
+            });
             return resp;
         }
 
         if (actionId == QLatin1String("browseHosts")) {
+            const QJsonObject params = parseJsonObject(request.paramsJson);
             QList<HostEntry> hosts;
             QString error;
             if (!fetchHostSnapshot(hosts, &error)) {
+                std::cerr << "fritz-ipc browseHosts failed: "
+                          << error.toStdString() << '\n';
                 resp.status = v1::CmdStatus::Failure;
                 resp.error = error.isEmpty() ? "Failed to fetch host snapshot" : error.toStdString();
                 resp.errorContext = "instance.action";
                 return resp;
             }
 
-            QSet<QString> activeMacs;
+            QSet<QString> selectedMacs = parseTrackedMacSelection(params.value(QStringLiteral("trackedMacs")));
+            selectedMacs.unite(parseTrackedMacSelection(m_meta.value(QStringLiteral("trackedMacs"))));
+            selectedMacs.unite(m_trackedMacs);
+
             QMap<QString, QJsonObject> knownMap = knownHostMapFromMeta(m_meta);
             QMap<QString, QJsonObject> nextMap;
             for (const HostEntry &entry : std::as_const(hosts)) {
-                if (!entry.active)
-                    continue;
                 const QString mac = normalizeMac(entry.mac);
                 if (mac.isEmpty())
                     continue;
 
-                activeMacs.insert(mac);
                 const QString name = entry.name.trimmed();
                 const QString ip = entry.ip.trimmed();
                 QJsonObject merged = knownMap.value(mac);
@@ -438,12 +511,23 @@ public:
                 nextMap.insert(mac, merged);
             }
 
+            for (const QString &mac : std::as_const(selectedMacs)) {
+                if (nextMap.contains(mac))
+                    continue;
+                QJsonObject merged = knownMap.value(mac);
+                merged.insert(QStringLiteral("mac"), mac);
+                nextMap.insert(mac, merged);
+            }
+
             QJsonArray knownHosts;
             for (auto it = nextMap.cbegin(); it != nextMap.cend(); ++it)
                 knownHosts.append(it.value());
 
             QJsonObject patch;
             patch.insert(QStringLiteral("knownHosts"), knownHosts);
+            QJsonArray trackedMacs;
+            trackedMacs = sortedMacArray(selectedMacs);
+            patch.insert(QStringLiteral("trackedMacs"), trackedMacs);
             for (auto it = patch.begin(); it != patch.end(); ++it)
                 m_meta.insert(it.key(), it.value());
             m_info.metaJson = toJson(m_meta);
@@ -456,8 +540,26 @@ public:
                 std::cerr << "failed to send adapterDescriptorUpdated(browseHosts): " << sendError << '\n';
 
             resp.status = v1::CmdStatus::Success;
-            resp.resultType = v1::ActionResultType::String;
-            resp.resultValue = QStringLiteral("%1 hosts").arg(activeMacs.size()).toStdString();
+            resp.resultType = v1::ActionResultType::None;
+            resp.reloadLayout = true;
+            resp.formValuesJson = toJson(QJsonObject{
+                {QStringLiteral("trackedMacs"), trackedMacs},
+            });
+            QJsonArray trackedChoices;
+            const v1::AdapterConfigOptionList trackedOptions = buildTrackedOptions(m_meta);
+            for (const v1::AdapterConfigOption &option : trackedOptions) {
+                QJsonObject choice;
+                choice.insert(QStringLiteral("value"), QString::fromStdString(option.value));
+                choice.insert(QStringLiteral("label"), QString::fromStdString(option.label));
+                trackedChoices.append(choice);
+            }
+            resp.fieldChoicesJson = toJson(QJsonObject{
+                {QStringLiteral("trackedMacs"), trackedChoices},
+            });
+            std::cerr << "fritz-ipc browseHosts success hosts=" << hosts.size()
+                      << " selected=" << selectedMacs.size()
+                      << " choices=" << trackedChoices.size()
+                      << '\n';
             return resp;
         }
 
@@ -1095,6 +1197,14 @@ private:
         }
 
         hosts = parseHostList(listResult.payload);
+        if (hosts.isEmpty()) {
+            QString fallbackError;
+            if (fetchHostEntries(hosts, &fallbackError))
+                return true;
+            if (error && !fallbackError.isEmpty())
+                *error = fallbackError;
+            return false;
+        }
         return true;
     }
 
@@ -1270,21 +1380,7 @@ private:
             m_retryIntervalMs = retry;
 
         m_trackedMacs.clear();
-        const QJsonValue trackedValue = m_meta.value(QStringLiteral("trackedMacs"));
-        if (trackedValue.isArray()) {
-            const QJsonArray arr = trackedValue.toArray();
-            for (const QJsonValue &entry : arr) {
-                if (!entry.isString())
-                    continue;
-                const QString mac = normalizeMac(entry.toString());
-                if (!mac.isEmpty())
-                    m_trackedMacs.insert(mac);
-            }
-        } else if (trackedValue.isString()) {
-            const QString mac = normalizeMac(trackedValue.toString());
-            if (!mac.isEmpty())
-                m_trackedMacs.insert(mac);
-        }
+        m_trackedMacs = parseTrackedMacSelection(m_meta.value(QStringLiteral("trackedMacs")));
     }
 
     void setConnected(bool connected)
@@ -1604,7 +1700,8 @@ private:
                         const QString &actionLabel = QString(),
                         const QString &parentActionId = QString(),
                         const QJsonArray &flags = QJsonArray(),
-                        const QJsonArray &choices = QJsonArray()) {
+                        const QJsonArray &choices = QJsonArray(),
+                        const QJsonObject &layout = QJsonObject()) {
             QJsonObject obj;
             obj.insert(QStringLiteral("key"), key);
             obj.insert(QStringLiteral("type"), type);
@@ -1621,6 +1718,8 @@ private:
                 obj.insert(QStringLiteral("flags"), flags);
             if (!choices.isEmpty())
                 obj.insert(QStringLiteral("choices"), choices);
+            if (!layout.isEmpty())
+                obj.insert(QStringLiteral("layout"), layout);
             return obj;
         };
 
@@ -1673,8 +1772,7 @@ private:
         }
 
         QJsonArray trackedDefaults;
-        for (const QString &mac : std::as_const(m_trackedMacs))
-            trackedDefaults.append(mac);
+        trackedDefaults = sortedMacArray(m_trackedMacs);
 
         QJsonArray instanceFields;
         instanceFields.append(field(QStringLiteral("trackedMacs"),
@@ -1682,10 +1780,14 @@ private:
                                     QStringLiteral("Tracked devices"),
                                     trackedDefaults,
                                     QStringLiteral("browseHosts"),
-                                    QStringLiteral("Browse WLAN"),
+                                    QStringLiteral("Probe WLAN"),
                                     QStringLiteral("settings"),
                                     QJsonArray{QStringLiteral("Multi"), QStringLiteral("InstanceOnly")},
-                                    trackedChoices));
+                                    trackedChoices,
+                                    QJsonObject{
+                                        {QStringLiteral("labelPosition"), QStringLiteral("top")},
+                                        {QStringLiteral("actionPosition"), QStringLiteral("below")},
+                                    }));
 
         QJsonObject factorySection;
         factorySection.insert(QStringLiteral("title"), QStringLiteral("FRITZ!Box"));
@@ -1755,7 +1857,8 @@ int main(int argc, char **argv)
         ? argv[1]
         : (envSocketPath ? envSocketPath : v1::Utf8String("/tmp/phi-adapter-fritz-ipc.sock"));
 
-    std::cerr << "starting phi_adapter_fritz_ipc for pluginType=" << kPluginType
+    std::cerr << "starting " << (argc > 0 && argv && argv[0] ? argv[0] : "phi_adapter_fritz")
+              << " for pluginType=" << kPluginType
               << " socket=" << socketPath << '\n';
 
     FritzIpcFactory factory;
