@@ -35,6 +35,7 @@ namespace sdk = phicore::adapter::sdk;
 namespace {
 
 constexpr const char kPluginType[] = "fritz!";
+constexpr std::uint16_t kDefaultTr064Port = 49000;
 constexpr const char kRouterDeviceId[] = "router";
 constexpr const char kDeviceSoftwareUpdateChannelId[] = "device_software_update";
 constexpr const char kHostsServiceType[] = "urn:dslforum-org:service:Hosts:1";
@@ -85,6 +86,21 @@ std::string toJson(const QJsonObject &obj)
 QString normalizeMac(const QString &mac)
 {
     return mac.trimmed().toLower();
+}
+
+quint16 parsePortValue(const QJsonValue &value)
+{
+    int parsed = 0;
+    bool ok = false;
+    if (value.isDouble()) {
+        parsed = value.toInt();
+        ok = true;
+    } else if (value.isString()) {
+        parsed = value.toString().trimmed().toInt(&ok);
+    }
+    if (!ok || parsed <= 0 || parsed > 65535)
+        return 0;
+    return static_cast<quint16>(parsed);
 }
 
 QSet<QString> parseTrackedMacSelection(const QJsonValue &value)
@@ -338,7 +354,7 @@ public:
         caps.flags = v1::AdapterFlag::SupportsDiscovery
             | v1::AdapterFlag::SupportsProbe
             | v1::AdapterFlag::RequiresPolling;
-        caps.defaultsJson = R"({"pollIntervalMs":5000,"retryIntervalMs":10000})";
+        caps.defaultsJson = R"({"tr064Port":49000,"pollIntervalMs":5000,"retryIntervalMs":10000})";
 
         v1::AdapterActionDescriptor browse;
         browse.id = "browseHosts";
@@ -571,6 +587,13 @@ public:
             const QString user = resolveProbeUser(factoryAdapter);
             const QString password = resolveProbePassword(factoryAdapter);
             const bool useTls = resolveProbeUseTls(factoryAdapter);
+            const QString endpoint = QStringLiteral("%1://%2:%3")
+                .arg(useTls ? QStringLiteral("https") : QStringLiteral("http"), host)
+                .arg(port > 0 ? port : static_cast<quint16>(kDefaultTr064Port));
+
+            std::cerr << "fritz-ipc probe endpoint=" << endpoint.toStdString()
+                      << " userSet=" << (!user.isEmpty() ? "true" : "false")
+                      << '\n';
 
             if (host.isEmpty()) {
                 resp.status = v1::CmdStatus::InvalidArgument;
@@ -585,7 +608,10 @@ public:
                 resp.resultValue = QStringLiteral("%1:%2").arg(host).arg(port).toStdString();
             } else {
                 resp.status = v1::CmdStatus::Failure;
-                resp.error = error.isEmpty() ? "Probe failed" : error.toStdString();
+                resp.error = (error.isEmpty()
+                                  ? QStringLiteral("Probe failed (%1)").arg(endpoint)
+                                  : QStringLiteral("%1 (%2)").arg(error, endpoint))
+                                 .toStdString();
                 resp.errorContext = "factory.action";
             }
             return resp;
@@ -912,7 +938,11 @@ private:
 
     quint16 resolvedPort() const
     {
-        return m_info.port > 0 ? m_info.port : 49000;
+        if (m_tr064Port > 0)
+            return m_tr064Port;
+        if (m_info.port > 0)
+            return m_info.port;
+        return static_cast<quint16>(kDefaultTr064Port);
     }
 
     QString resolveBaseUrl(bool useTls = false) const
@@ -949,19 +979,10 @@ private:
 
     quint16 resolveProbePort(const QJsonObject &factoryAdapter) const
     {
-        auto parsePort = [](const QJsonValue &value) -> quint16 {
-            if (!value.isDouble())
-                return 0;
-            const int parsed = value.toInt();
-            if (parsed <= 0 || parsed > 65535)
-                return 0;
-            return static_cast<quint16>(parsed);
-        };
-
-        quint16 port = parsePort(factoryAdapter.value(QStringLiteral("port")));
+        quint16 port = parsePortValue(factoryAdapter.value(QStringLiteral("tr064Port")));
         if (port == 0) {
             const QJsonObject meta = factoryAdapter.value(QStringLiteral("meta")).toObject();
-            port = parsePort(meta.value(QStringLiteral("port")));
+            port = parsePortValue(meta.value(QStringLiteral("tr064Port")));
         }
         return port > 0 ? port : resolvedPort();
     }
@@ -1023,10 +1044,18 @@ private:
 
     static QJsonObject resolveFactoryAdapterFromParams(const QJsonObject &params)
     {
-        const QJsonObject candidate = params.value(QStringLiteral("factoryAdapter")).toObject();
-        if (!candidate.isEmpty())
-            return candidate;
-        return params;
+        QJsonObject resolved = params.value(QStringLiteral("factoryAdapter")).toObject();
+        if (resolved.isEmpty())
+            return params;
+
+        // Form values are passed at top-level params and must override the
+        // persisted/discovered candidate values in factoryAdapter.
+        for (auto it = params.constBegin(); it != params.constEnd(); ++it) {
+            if (it.key() == QLatin1String("factoryAdapter"))
+                continue;
+            resolved.insert(it.key(), it.value());
+        }
+        return resolved;
     }
 
     bool probeConnection(const QString &host,
@@ -1049,7 +1078,7 @@ private:
 
         const QString baseUrl = QStringLiteral("%1://%2:%3")
             .arg(useTls ? QStringLiteral("https") : QStringLiteral("http"), host)
-            .arg(port > 0 ? port : static_cast<quint16>(49000));
+            .arg(port > 0 ? port : static_cast<quint16>(kDefaultTr064Port));
 
         const HttpResult result = sendSoapRequest(&manager,
                                                   baseUrl,
@@ -1378,6 +1407,8 @@ private:
         const int retry = m_meta.value(QStringLiteral("retryIntervalMs")).toInt(10000);
         if (retry >= 1000)
             m_retryIntervalMs = retry;
+        const quint16 tr064Port = parsePortValue(m_meta.value(QStringLiteral("tr064Port")));
+        m_tr064Port = tr064Port > 0 ? tr064Port : static_cast<quint16>(kDefaultTr064Port);
 
         m_trackedMacs.clear();
         m_trackedMacs = parseTrackedMacSelection(m_meta.value(QStringLiteral("trackedMacs")));
@@ -1733,9 +1764,9 @@ private:
                                    QString(),
                                    QString(),
                                    QJsonArray{QStringLiteral("Required")}));
-        factoryFields.append(field(QStringLiteral("port"),
-                                   QStringLiteral("Port"),
-                                   QStringLiteral("Port"),
+        factoryFields.append(field(QStringLiteral("tr064Port"),
+                                   QStringLiteral("Integer"),
+                                   QStringLiteral("TR-064 port"),
                                    static_cast<int>(resolvedPort())));
         factoryFields.append(field(QStringLiteral("user"),
                                    QStringLiteral("String"),
@@ -1821,6 +1852,7 @@ private:
 
     int m_pollIntervalMs = 5000;
     int m_retryIntervalMs = 10000;
+    quint16 m_tr064Port = static_cast<quint16>(kDefaultTr064Port);
     std::int64_t m_nextPollDueMs = 0;
     std::int64_t m_lastPollErrorLogMs = 0;
 
