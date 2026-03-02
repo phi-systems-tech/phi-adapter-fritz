@@ -57,6 +57,7 @@ if(PHI_ADAPTER_FRITZ_BUILD_IPC)
     )
 
     set_target_properties(phi_adapter_fritz_ipc PROPERTIES
+        OUTPUT_NAME "phi_adapter_fritz!_ipc"
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins/adapters"
     )
 

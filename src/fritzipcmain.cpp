@@ -220,22 +220,28 @@ public:
     void onBootstrap(const sdk::BootstrapRequest &request) override
     {
         AdapterSidecar::onBootstrap(request);
-
-        m_info = request.adapter;
-        m_meta = parseJsonObject(m_info.metaJson);
-        refreshConfig();
-
+        m_started = false;
         m_knownDevices.clear();
         m_routerEmitted = false;
         m_routerName.clear();
         m_routerFirmware.clear();
-        m_started = true;
         m_pendingFullSync = true;
         m_lastPollError.clear();
+        m_lastPollErrorLogMs = 0;
+        m_nextPollDueMs = 0;
+        setConnected(false);
+    }
 
+    void onConfigChanged(const sdk::ConfigChangedRequest &request) override
+    {
+        AdapterSidecar::onConfigChanged(request);
+        m_info = request.adapter;
+        m_meta = parseJsonObject(request.adapter.metaJson);
+        refreshConfig();
+        m_started = true;
         ensureNetworkManager();
 
-        std::cerr << "fritz-ipc bootstrap adapterId=" << request.adapterId
+        std::cerr << "fritz-ipc config.changed adapterId=" << request.adapterId
                   << " externalId=" << m_info.externalId
                   << " pluginType=" << m_info.pluginType << '\n';
 
