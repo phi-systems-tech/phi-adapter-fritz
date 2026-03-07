@@ -275,7 +275,6 @@ public:
         m_routerEmitted = false;
         m_routerName.clear();
         m_routerFirmware.clear();
-        m_pendingFullSync = true;
         m_lastPollError.clear();
         m_lastPollErrorLogMs = 0;
         m_nextPollDueMs = 0;
@@ -1447,10 +1446,6 @@ private:
         QString hostError;
         if (!ensureHostAvailable(&hostError)) {
             setConnected(false);
-            if (m_pendingFullSync) {
-                m_pendingFullSync = false;
-                sendFullSyncCompleted();
-            }
             logPollError(hostError);
             return;
         }
@@ -1459,10 +1454,6 @@ private:
         QString hostFetchError;
         if (!fetchHostSnapshot(hosts, &hostFetchError)) {
             setConnected(false);
-            if (m_pendingFullSync) {
-                m_pendingFullSync = false;
-                sendFullSyncCompleted();
-            }
             logPollError(hostFetchError);
             return;
         }
@@ -1475,10 +1466,6 @@ private:
         if (fetchRouterSnapshot(snapshot, &snapshotError))
             applyRouterSnapshot(snapshot);
 
-        if (m_pendingFullSync) {
-            m_pendingFullSync = false;
-            sendFullSyncCompleted();
-        }
     }
 
     void handleHostSnapshot(const QList<HostEntry> &hosts)
@@ -1847,7 +1834,6 @@ private:
 
     bool m_connected = false;
     bool m_started = false;
-    bool m_pendingFullSync = false;
     bool m_routerEmitted = false;
 
     int m_pollIntervalMs = 5000;
