@@ -7,6 +7,7 @@
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <unordered_set>
 #include <string>
 #include <thread>
 
@@ -228,6 +229,110 @@ v1::AdapterConfigOptionList buildTrackedOptions(const QJsonObject &meta)
     return options;
 }
 
+QJsonObject buildFritzConfigSchemaObject()
+{
+    auto field = [](const QString &key,
+                    const QString &type,
+                    const QString &label,
+                    const QJsonValue &defaultValue = QJsonValue(),
+                    const QString &actionId = QString(),
+                    const QString &actionLabel = QString(),
+                    const QString &parentActionId = QString(),
+                    const QJsonArray &flags = QJsonArray(),
+                    const QJsonArray &choices = QJsonArray(),
+                    const QJsonObject &layout = QJsonObject()) {
+        QJsonObject obj;
+        obj.insert(QStringLiteral("key"), key);
+        obj.insert(QStringLiteral("type"), type);
+        obj.insert(QStringLiteral("label"), label);
+        if (!defaultValue.isUndefined() && !defaultValue.isNull())
+            obj.insert(QStringLiteral("default"), defaultValue);
+        if (!actionId.isEmpty())
+            obj.insert(QStringLiteral("actionId"), actionId);
+        if (!actionLabel.isEmpty())
+            obj.insert(QStringLiteral("actionLabel"), actionLabel);
+        if (!parentActionId.isEmpty())
+            obj.insert(QStringLiteral("parentActionId"), parentActionId);
+        if (!flags.isEmpty())
+            obj.insert(QStringLiteral("flags"), flags);
+        if (!choices.isEmpty())
+            obj.insert(QStringLiteral("choices"), choices);
+        if (!layout.isEmpty())
+            obj.insert(QStringLiteral("layout"), layout);
+        return obj;
+    };
+
+    QJsonArray factoryFields;
+    factoryFields.append(field(QStringLiteral("host"),
+                              QStringLiteral("Hostname"),
+                              QStringLiteral("Host"),
+                              QJsonValue(),
+                              QString(),
+                              QString(),
+                              QString(),
+                              QJsonArray{QStringLiteral("Required")}));
+    factoryFields.append(field(QStringLiteral("tr064Port"),
+                              QStringLiteral("Integer"),
+                              QStringLiteral("TR-064 port"),
+                              static_cast<int>(kDefaultTr064Port)));
+    factoryFields.append(field(QStringLiteral("user"),
+                              QStringLiteral("String"),
+                              QStringLiteral("Username"),
+                              QJsonValue(),
+                              QString(),
+                              QString(),
+                              QString(),
+                              QJsonArray{QStringLiteral("Required")}));
+    factoryFields.append(field(QStringLiteral("password"),
+                              QStringLiteral("Password"),
+                              QStringLiteral("Password"),
+                              QJsonValue(),
+                              QString(),
+                              QString(),
+                              QString(),
+                              QJsonArray{QStringLiteral("Required"), QStringLiteral("Secret")}));
+    factoryFields.append(field(QStringLiteral("pollIntervalMs"),
+                              QStringLiteral("Integer"),
+                              QStringLiteral("Poll interval"),
+                              5000));
+    factoryFields.append(field(QStringLiteral("retryIntervalMs"),
+                              QStringLiteral("Integer"),
+                              QStringLiteral("Retry interval"),
+                              10000));
+
+    QJsonArray instanceFields;
+    instanceFields.append(field(QStringLiteral("trackedMacs"),
+                               QStringLiteral("Select"),
+                               QStringLiteral("Tracked devices"),
+                               QJsonArray(),
+                               QStringLiteral("browseHosts"),
+                               QStringLiteral("Probe WLAN"),
+                               QStringLiteral("settings"),
+                               QJsonArray{QStringLiteral("Multi"), QStringLiteral("InstanceOnly")},
+                               QJsonArray(),
+                               QJsonObject{
+                                   {QStringLiteral("labelPosition"), QStringLiteral("top")},
+                                   {QStringLiteral("actionPosition"), QStringLiteral("below")},
+                               }));
+
+    QJsonObject factorySection;
+    factorySection.insert(QStringLiteral("title"), QStringLiteral("FRITZ!Box"));
+    factorySection.insert(QStringLiteral("description"),
+                         QStringLiteral("Connect via TR-064 to track network clients."));
+    factorySection.insert(QStringLiteral("fields"), factoryFields);
+
+    QJsonObject instanceSection;
+    instanceSection.insert(QStringLiteral("title"), QStringLiteral("FRITZ!Box"));
+    instanceSection.insert(QStringLiteral("description"),
+                          QStringLiteral("Connect via TR-064 to track network clients."));
+    instanceSection.insert(QStringLiteral("fields"), instanceFields);
+
+    QJsonObject schema;
+    schema.insert(QStringLiteral("factory"), factorySection);
+    schema.insert(QStringLiteral("instance"), instanceSection);
+    return schema;
+}
+
 struct HostEntry {
     QString mac;
     QString name;
@@ -264,12 +369,11 @@ struct HttpResult {
     QString error;
 };
 
-class FritzIpcSidecar final : public sdk::AdapterSidecar
+class FritzIpcInstance final : public sdk::AdapterInstance
 {
 public:
-    void onBootstrap(const sdk::BootstrapRequest &request) override
+    bool start() override
     {
-        AdapterSidecar::onBootstrap(request);
         m_started = false;
         m_knownDevices.clear();
         m_routerEmitted = false;
@@ -279,11 +383,12 @@ public:
         m_lastPollErrorLogMs = 0;
         m_nextPollDueMs = 0;
         setConnected(false);
+        return true;
     }
 
     void onConfigChanged(const sdk::ConfigChangedRequest &request) override
     {
-        AdapterSidecar::onConfigChanged(request);
+        AdapterInstance::onConfigChanged(request);
         m_info = request.adapter;
         m_meta = parseJsonObject(request.adapter.metaJson);
         refreshConfig();
@@ -296,12 +401,6 @@ public:
                   << " tracked=" << m_trackedMacs.size()
                   << " known=" << knownHostMapFromMeta(m_meta).size()
                   << '\n';
-
-        v1::Utf8String descriptorError;
-        if (!sendAdapterDescriptorUpdated(descriptor(), &descriptorError)) {
-            std::cerr << "failed to send adapterDescriptorUpdated(config.changed): "
-                      << descriptorError << '\n';
-        }
 
         setConnected(false);
         pollOnce();
@@ -316,92 +415,31 @@ public:
         std::cerr << "fritz-ipc disconnected externalId=" << m_info.externalId << '\n';
     }
 
-    v1::Utf8String displayName() const override
-    {
-        return "FRITZ!Box";
-    }
-
-    v1::Utf8String description() const override
-    {
-        return "AVM FRITZ!Box via TR-064 (IPC sidecar)";
-    }
-
-    v1::Utf8String apiVersion() const override
-    {
-        return v1::kProtocolLabel;
-    }
-
-    v1::Utf8String iconSvg() const override
-    {
-        return kFritzIconSvg;
-    }
-
-    int timeoutMs() const override
-    {
-        return 15000;
-    }
-
-    int maxInstances() const override
-    {
-        return 0;
-    }
-
-    v1::AdapterCapabilities capabilities() const override
-    {
-        v1::AdapterCapabilities caps;
-        caps.required = v1::AdapterRequirement::UsesRetryInterval;
-        caps.flags = v1::AdapterFlag::SupportsDiscovery
-            | v1::AdapterFlag::SupportsProbe
-            | v1::AdapterFlag::RequiresPolling;
-        caps.defaultsJson = R"({"tr064Port":49000,"pollIntervalMs":5000,"retryIntervalMs":10000})";
-
-        v1::AdapterActionDescriptor browse;
-        browse.id = "browseHosts";
-        browse.label = "Probe WLAN";
-        browse.description = "Fetch current WLAN/LAN clients";
-        browse.metaJson = R"({"placement":"form_field","kind":"command","requiresAck":true})";
-        caps.instanceActions.push_back(browse);
-
-        v1::AdapterActionDescriptor settings;
-        settings.id = "settings";
-        settings.label = "Settings";
-        settings.description = "Edit tracked devices.";
-        settings.hasForm = true;
-        settings.metaJson = R"({"placement":"card","kind":"open_dialog","requiresAck":true})";
-        caps.instanceActions.push_back(settings);
-
-        v1::AdapterActionDescriptor probe;
-        probe.id = "probe";
-        probe.label = "Test connection";
-        probe.description = "Reachability and credentials check";
-        probe.metaJson = R"({"placement":"card","kind":"command","requiresAck":true})";
-        caps.factoryActions.push_back(probe);
-
-        return caps;
-    }
-
-    v1::JsonText configSchemaJson() const override
-    {
-        return toJson(buildConfigSchemaObject());
-    }
-
-    v1::CmdResponse onChannelInvoke(const sdk::ChannelInvokeRequest &request) override
+    void onChannelInvoke(const sdk::ChannelInvokeRequest &request) override
     {
         v1::CmdResponse resp;
         resp.id = request.cmdId;
         resp.tsMs = nowMs();
 
+        auto submitResponse = [this, &resp]() {
+            v1::Utf8String err;
+            if (!sendResult(resp, &err))
+                std::cerr << "fritz-ipc onChannelInvoke sendResult failed: " << err << '\n';
+        };
+
         if (request.deviceExternalId != kRouterDeviceId) {
             resp.status = v1::CmdStatus::NotSupported;
             resp.error = "Channel only supported for router device";
-            return resp;
+            submitResponse();
+            return;
         }
 
         const auto enabled = scalarToBool(request.value);
         if (!enabled.has_value()) {
             resp.status = v1::CmdStatus::InvalidArgument;
             resp.error = "Expected boolean value";
-            return resp;
+            submitResponse();
+            return;
         }
 
         if (request.channelExternalId == "wlan_24_enabled") {
@@ -414,7 +452,8 @@ public:
                 resp.status = v1::CmdStatus::Failure;
                 resp.error = error.isEmpty() ? "WLAN 2.4 GHz update failed" : error.toStdString();
             }
-            return resp;
+            submitResponse();
+            return;
         }
 
         if (request.channelExternalId == "wlan_5_enabled") {
@@ -427,19 +466,26 @@ public:
                 resp.status = v1::CmdStatus::Failure;
                 resp.error = error.isEmpty() ? "WLAN 5 GHz update failed" : error.toStdString();
             }
-            return resp;
+            submitResponse();
+            return;
         }
 
         resp.status = v1::CmdStatus::NotSupported;
         resp.error = "Channel not supported";
-        return resp;
+        submitResponse();
     }
 
-    v1::ActionResponse onAdapterActionInvoke(const sdk::AdapterActionInvokeRequest &request) override
+    void onAdapterActionInvoke(const sdk::AdapterActionInvokeRequest &request) override
     {
         v1::ActionResponse resp;
         resp.id = request.cmdId;
         resp.tsMs = nowMs();
+
+        auto submitResponse = [this, &resp]() {
+            v1::Utf8String err;
+            if (!sendResult(resp, &err))
+                std::cerr << "fritz-ipc onAdapterActionInvoke sendResult failed: " << err << '\n';
+        };
 
         const QString actionId = QString::fromStdString(request.actionId).trimmed();
         if (actionId == QLatin1String("settings")) {
@@ -464,9 +510,7 @@ public:
 
                 v1::Utf8String error;
                 if (!sendAdapterMetaUpdated(toJson(patch), &error))
-                    std::cerr << "failed to send adapterMetaUpdated(settings): " << error << '\n';
-                if (!sendAdapterDescriptorUpdated(descriptor(), &error))
-                    std::cerr << "failed to send adapterDescriptorUpdated(settings): " << error << '\n';
+                std::cerr << "failed to send adapterMetaUpdated(settings): " << error << '\n';
 
                 pollOnce();
                 scheduleNextPoll();
@@ -488,7 +532,8 @@ public:
             resp.fieldChoicesJson = toJson(QJsonObject{
                 {QStringLiteral("trackedMacs"), trackedChoices},
             });
-            return resp;
+            submitResponse();
+            return;
         }
 
         if (actionId == QLatin1String("browseHosts")) {
@@ -501,7 +546,8 @@ public:
                 resp.status = v1::CmdStatus::Failure;
                 resp.error = error.isEmpty() ? "Failed to fetch host snapshot" : error.toStdString();
                 resp.errorContext = "instance.action";
-                return resp;
+                submitResponse();
+                return;
             }
 
             QSet<QString> selectedMacs = parseTrackedMacSelection(params.value(QStringLiteral("trackedMacs")));
@@ -551,8 +597,6 @@ public:
             v1::Utf8String sendError;
             if (!sendAdapterMetaUpdated(toJson(patch), &sendError))
                 std::cerr << "failed to send adapterMetaUpdated(browseHosts): " << sendError << '\n';
-            if (!sendAdapterDescriptorUpdated(descriptor(), &sendError))
-                std::cerr << "failed to send adapterDescriptorUpdated(browseHosts): " << sendError << '\n';
 
             resp.status = v1::CmdStatus::Success;
             resp.resultType = v1::ActionResultType::None;
@@ -575,7 +619,8 @@ public:
                       << " selected=" << selectedMacs.size()
                       << " choices=" << trackedChoices.size()
                       << '\n';
-            return resp;
+            submitResponse();
+            return;
         }
 
         if (actionId == QLatin1String("probe")) {
@@ -597,7 +642,8 @@ public:
             if (host.isEmpty()) {
                 resp.status = v1::CmdStatus::InvalidArgument;
                 resp.error = "Probe requires host or ip";
-                return resp;
+                submitResponse();
+                return;
             }
 
             QString error;
@@ -613,42 +659,52 @@ public:
                                  .toStdString();
                 resp.errorContext = "factory.action";
             }
-            return resp;
+            submitResponse();
+            return;
         }
 
         resp.status = v1::CmdStatus::NotSupported;
         resp.error = "Adapter action not supported";
-        return resp;
+        submitResponse();
     }
 
-    v1::CmdResponse onDeviceNameUpdate(const sdk::DeviceNameUpdateRequest &request) override
+    void onDeviceNameUpdate(const sdk::DeviceNameUpdateRequest &request) override
     {
         v1::CmdResponse resp;
         resp.id = request.cmdId;
         resp.status = v1::CmdStatus::NotImplemented;
         resp.error = "Device rename not supported";
         resp.tsMs = nowMs();
-        return resp;
+
+        v1::Utf8String error;
+        if (!sendResult(resp, &error))
+            std::cerr << "fritz-ipc onDeviceNameUpdate sendResult failed: " << error << '\n';
     }
 
-    v1::CmdResponse onDeviceEffectInvoke(const sdk::DeviceEffectInvokeRequest &request) override
+    void onDeviceEffectInvoke(const sdk::DeviceEffectInvokeRequest &request) override
     {
         v1::CmdResponse resp;
         resp.id = request.cmdId;
         resp.status = v1::CmdStatus::NotImplemented;
         resp.error = "Device effect not supported";
         resp.tsMs = nowMs();
-        return resp;
+
+        v1::Utf8String error;
+        if (!sendResult(resp, &error))
+            std::cerr << "fritz-ipc onDeviceEffectInvoke sendResult failed: " << error << '\n';
     }
 
-    v1::CmdResponse onSceneInvoke(const sdk::SceneInvokeRequest &request) override
+    void onSceneInvoke(const sdk::SceneInvokeRequest &request) override
     {
         v1::CmdResponse resp;
         resp.id = request.cmdId;
         resp.status = v1::CmdStatus::NotImplemented;
         resp.error = "Scene invocation not supported";
         resp.tsMs = nowMs();
-        return resp;
+
+        v1::Utf8String error;
+        if (!sendResult(resp, &error))
+            std::cerr << "fritz-ipc onSceneInvoke sendResult failed: " << error << '\n';
     }
 
     void tick()
@@ -1850,15 +1906,103 @@ private:
 class FritzIpcFactory final : public sdk::AdapterFactory
 {
 public:
+    void tickInstances()
+    {
+        for (const auto instance : m_instances)
+            instance->tick();
+    }
+
     v1::Utf8String pluginType() const override
     {
         return kPluginType;
     }
 
-    std::unique_ptr<sdk::AdapterSidecar> create() const override
+    v1::Utf8String displayName() const override
     {
-        return std::make_unique<FritzIpcSidecar>();
+        return "FRITZ!Box";
     }
+
+    v1::Utf8String description() const override
+    {
+        return "AVM FRITZ!Box via TR-064 (IPC sidecar)";
+    }
+
+    v1::Utf8String apiVersion() const override
+    {
+        return v1::kProtocolLabel;
+    }
+
+    v1::Utf8String iconSvg() const override
+    {
+        return kFritzIconSvg;
+    }
+
+    int timeoutMs() const override
+    {
+        return 15000;
+    }
+
+    int maxInstances() const override
+    {
+        return 0;
+    }
+
+    v1::AdapterCapabilities capabilities() const override
+    {
+        v1::AdapterCapabilities caps;
+        caps.required = v1::AdapterRequirement::UsesRetryInterval;
+        caps.flags = v1::AdapterFlag::SupportsDiscovery
+            | v1::AdapterFlag::SupportsProbe
+            | v1::AdapterFlag::RequiresPolling;
+        caps.defaultsJson = R"({"tr064Port":49000,"pollIntervalMs":5000,"retryIntervalMs":10000})";
+
+        v1::AdapterActionDescriptor browse;
+        browse.id = "browseHosts";
+        browse.label = "Probe WLAN";
+        browse.description = "Fetch current WLAN/LAN clients";
+        browse.metaJson = R"({"placement":"form_field","kind":"command","requiresAck":true})";
+        caps.instanceActions.push_back(browse);
+
+        v1::AdapterActionDescriptor settings;
+        settings.id = "settings";
+        settings.label = "Settings";
+        settings.description = "Edit tracked devices.";
+        settings.hasForm = true;
+        settings.metaJson = R"({"placement":"card","kind":"open_dialog","requiresAck":true})";
+        caps.instanceActions.push_back(settings);
+
+        v1::AdapterActionDescriptor probe;
+        probe.id = "probe";
+        probe.label = "Test connection";
+        probe.description = "Reachability and credentials check";
+        probe.metaJson = R"({"placement":"card","kind":"command","requiresAck":true})";
+        caps.factoryActions.push_back(probe);
+
+        return caps;
+    }
+
+    v1::JsonText configSchemaJson() const override
+    {
+        return toJson(buildFritzConfigSchemaObject());
+    }
+
+    std::unique_ptr<sdk::AdapterInstance> createInstance(const sdk::ExternalId &externalId) override
+    {
+        auto created = std::make_unique<FritzIpcInstance>();
+        (void)externalId;
+        m_instances.insert(created.get());
+        return created;
+    }
+
+    void destroyInstance(std::unique_ptr<sdk::AdapterInstance> instance) override
+    {
+        if (auto *typed = dynamic_cast<FritzIpcInstance *>(instance.get()))
+            m_instances.erase(typed);
+        sdk::AdapterFactory::destroyInstance(std::move(instance));
+    }
+
+private:
+    std::unordered_set<FritzIpcInstance *> m_instances;
 };
 
 } // namespace
@@ -1893,8 +2037,7 @@ int main(int argc, char **argv)
             std::cerr << "poll failed: " << error << '\n';
             std::this_thread::sleep_for(std::chrono::milliseconds(250));
         }
-        if (auto *adapter = dynamic_cast<FritzIpcSidecar *>(host.adapter()))
-            adapter->tick();
+        factory.tickInstances();
         QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
     }
 
