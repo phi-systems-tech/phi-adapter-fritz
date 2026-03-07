@@ -66,13 +66,13 @@ Provides local network TR-064 integration for FRITZ!Box via IPC sidecar.
 ### Build
 
 ```bash
-cmake -S . -B build
-cmake --build build --parallel
+cmake -S . -B ../build/phi-adapter-fritz/release-ninja -G Ninja
+cmake --build ../build/phi-adapter-fritz/release-ninja --parallel
 ```
 
 ### Installation
 
-- Build output: `build/plugins/adapters/phi_adapter_fritz_ipc`
+- Build output: `../build/phi-adapter-fritz/release-ninja/plugins/adapters/phi_adapter_fritz_ipc`
 - Deploy to: `/opt/phi/plugins/adapters/`
 
 ### Troubleshooting
