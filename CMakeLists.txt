@@ -6,6 +6,8 @@ project(phi-adapter-fritz
     LANGUAGES CXX
 )
 
+include(GNUInstallDirs)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -57,11 +59,11 @@ if(PHI_ADAPTER_FRITZ_BUILD_IPC)
     )
 
     set_target_properties(phi_adapter_fritz_ipc PROPERTIES
-        OUTPUT_NAME "phi_adapter_fritz!_ipc"
+        OUTPUT_NAME "phi_adapter_fritz_ipc"
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins/adapters"
     )
 
     install(TARGETS phi_adapter_fritz_ipc
-        RUNTIME DESTINATION lib/phi/plugins/adapters
+        RUNTIME DESTINATION ${CMAKE_INSTALL_LIBDIR}/phi/plugins/adapters
     )
 endif()

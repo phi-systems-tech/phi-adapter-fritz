@@ -35,7 +35,7 @@ namespace sdk = phicore::adapter::sdk;
 
 namespace {
 
-constexpr const char kPluginType[] = "fritz!";
+constexpr const char kPluginType[] = "fritz";
 constexpr std::uint16_t kDefaultTr064Port = 49000;
 constexpr const char kRouterDeviceId[] = "router";
 constexpr const char kDeviceSoftwareUpdateChannelId[] = "device_software_update";
