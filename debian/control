@@ -1,0 +1,14 @@
+Source: phi-adapter-fritz
+Section: libs
+Priority: optional
+Maintainer: Marius Schumacher <marius.schumacher@phisys.com>
+Build-Depends: debhelper-compat (= 13), cmake, ninja-build, qt6-base-dev, phi-adapter-sdk-dev
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+Homepage: https://phisys.com
+
+Package: phi-adapter-fritz
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: PHI FRITZ!Box adapter IPC sidecar
+ IPC sidecar executable for PHI core to integrate FRITZ!Box devices and services.
