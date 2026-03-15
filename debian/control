@@ -9,6 +9,6 @@ Homepage: https://phisys.com
 
 Package: phi-adapter-fritz
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}
+Depends: ${shlibs:Depends}, ${misc:Depends}, phi-adapter-sdk
 Description: PHI FRITZ!Box adapter IPC sidecar
  IPC sidecar executable for PHI core to integrate FRITZ!Box devices and services.
