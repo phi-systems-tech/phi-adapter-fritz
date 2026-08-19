@@ -28,6 +28,7 @@
 #include <QUrl>
 #include <QXmlStreamReader>
 
+#include "phi/adapter/sdk/qt/sidecar_driver_qt.h"
 #include "phi/adapter/sdk/sidecar.h"
 
 namespace v1 = phicore::adapter::v1;
@@ -2026,22 +2027,34 @@ int main(int argc, char **argv)
     FritzIpcFactory factory;
     sdk::SidecarHost host(socketPath, factory);
 
+    // The driver watches the host's poll descriptor from the Qt event loop:
+    // no polling interval, no idle wakeups, and the Qt event loop is no longer
+    // starved by a blocking poll (HTTP requests and timers run on time).
+    sdk::qt::SidecarDriver driver(host);
+
     v1::Utf8String error;
-    if (!host.start(&error)) {
+    if (!driver.start(&error)) {
         std::cerr << "failed to start sidecar host: " << error << '\n';
         return 1;
     }
 
-    while (g_running.load()) {
-        if (!host.pollOnce(std::chrono::milliseconds(250), &error)) {
-            std::cerr << "poll failed: " << error << '\n';
-            std::this_thread::sleep_for(std::chrono::milliseconds(250));
-        }
-        factory.tickInstances();
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
-    }
+    // Instance ticks used to ride on the poll loop; they get their own timer
+    // now (the tick handler throttles itself internally).
+    QTimer tickTimer;
+    QObject::connect(&tickTimer, &QTimer::timeout, [&factory]() { factory.tickInstances(); });
+    tickTimer.start(100);
 
-    host.stop();
+    // Signal handlers only flip a flag; a slow timer turns it into a clean
+    // Qt shutdown.
+    QTimer shutdownTimer;
+    QObject::connect(&shutdownTimer, &QTimer::timeout, [&]() {
+        if (!g_running.load(std::memory_order_relaxed))
+            app.quit();
+    });
+    shutdownTimer.start(250);
+
+    const int execResult = app.exec();
+    driver.stop();
     std::cerr << "stopping phi_adapter_fritz_ipc" << '\n';
-    return 0;
+    return execResult;
 }

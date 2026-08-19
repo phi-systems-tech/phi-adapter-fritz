@@ -25,6 +25,9 @@ option(PHI_ADAPTER_FRITZ_BUILD_IPC
 set(PHI_ADAPTER_SDK_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../phi-adapter-sdk" CACHE PATH
     "Path to local phi-adapter-sdk checkout. If not found, find_package(phi-adapter-sdk) is used."
 )
+set(PHI_ADAPTER_SDK_QT_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../phi-adapter-sdk-qt" CACHE PATH
+    "Path to local phi-adapter-sdk-qt checkout. If not found, find_package(phi-adapter-sdk-qt) is used."
+)
 option(PHI_ADAPTER_FRITZ_USE_LOCAL_ADAPTER_SDK
     "Use local ../phi-adapter-sdk checkout when available"
     ON
@@ -45,6 +48,20 @@ if(PHI_ADAPTER_FRITZ_BUILD_IPC)
         message(FATAL_ERROR "phi-adapter-sdk target phi::adapter-sdk not found")
     endif()
 
+    if(NOT TARGET phi::adapter-sdk-qt)
+        if(PHI_ADAPTER_FRITZ_USE_LOCAL_ADAPTER_SDK AND EXISTS "${PHI_ADAPTER_SDK_QT_SOURCE_DIR}/CMakeLists.txt")
+            message(STATUS "Using local phi-adapter-sdk-qt from: ${PHI_ADAPTER_SDK_QT_SOURCE_DIR}")
+            add_subdirectory("${PHI_ADAPTER_SDK_QT_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/_deps/phi-adapter-sdk-qt" EXCLUDE_FROM_ALL)
+        else()
+            message(STATUS "Using installed phi-adapter-sdk-qt via find_package")
+            find_package(phi-adapter-sdk-qt CONFIG REQUIRED)
+        endif()
+    endif()
+
+    if(NOT TARGET phi::adapter-sdk-qt)
+        message(FATAL_ERROR "phi-adapter-sdk-qt target phi::adapter-sdk-qt not found")
+    endif()
+
     add_executable(phi_adapter_fritz_ipc
         src/fritzipcmain.cpp
     )
@@ -56,6 +73,7 @@ if(PHI_ADAPTER_FRITZ_BUILD_IPC)
             Qt6::Core
             Qt6::Network
             phi::adapter-sdk
+            phi::adapter-sdk-qt
     )
 
     set_target_properties(phi_adapter_fritz_ipc PROPERTIES
