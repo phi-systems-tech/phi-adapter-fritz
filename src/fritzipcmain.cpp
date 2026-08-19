@@ -730,6 +730,8 @@ private:
     // Poll due-times are checked at this granularity; the actual interval comes
     // from pollIntervalMs / retryIntervalMs via scheduleNextPoll().
     static constexpr int kTickIntervalMs = 100;
+    // How often a nested request loop checks whether the host asked us to stop.
+    static constexpr int kCancelPollIntervalMs = 50;
 
     void tick()
     {
@@ -810,11 +812,19 @@ private:
         return body.toUtf8();
     }
 
-    static HttpResult waitForReply(QNetworkReply *reply, int timeoutMs)
+    // Not static: it consults stopRequested() so a shutdown does not have to wait
+    // out the request timeout (F-33).
+    HttpResult waitForReply(QNetworkReply *reply, int timeoutMs)
     {
         HttpResult result;
         if (!reply) {
             result.error = QStringLiteral("No reply object");
+            return result;
+        }
+        if (stopRequested()) {
+            reply->abort();
+            result.error = QStringLiteral("Cancelled: adapter is stopping");
+            reply->deleteLater();
             return result;
         }
 
@@ -822,10 +832,28 @@ private:
         timeout.setSingleShot(true);
         timeout.start(timeoutMs);
 
+        bool cancelled = false;
+        QTimer cancelPoll;
+        cancelPoll.setInterval(kCancelPollIntervalMs);
+
         QEventLoop loop;
+        QObject::connect(&cancelPoll, &QTimer::timeout, &loop, [this, &loop, &cancelled]() {
+            if (!stopRequested())
+                return;
+            cancelled = true;
+            loop.quit();
+        });
+        cancelPoll.start();
         QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
         QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
         loop.exec();
+
+        if (cancelled) {
+            reply->abort();
+            result.error = QStringLiteral("Cancelled: adapter is stopping");
+            reply->deleteLater();
+            return result;
+        }
 
         if (!timeout.isActive()) {
             reply->abort();
@@ -843,7 +871,7 @@ private:
         return result;
     }
 
-    static HttpResult sendSoapRequest(QNetworkAccessManager *manager,
+    HttpResult sendSoapRequest(QNetworkAccessManager *manager,
                                       const QString &baseUrl,
                                       const QString &controlPath,
                                       const QString &serviceType,
@@ -866,7 +894,7 @@ private:
         return waitForReply(manager->post(request, buildSoapEnvelope(serviceType, action, params)), timeoutMs);
     }
 
-    static HttpResult sendGetRequest(QNetworkAccessManager *manager,
+    HttpResult sendGetRequest(QNetworkAccessManager *manager,
                                      const QString &url,
                                      int timeoutMs = 3000)
     {
@@ -1231,6 +1259,13 @@ private:
 
         hosts.clear();
         for (int index = 0; index < total; ++index) {
+            // One SOAP round trip per host: without this the loop would keep
+            // going for total x timeoutMs after a stop request (F-33).
+            if (stopRequested()) {
+                if (error)
+                    *error = QStringLiteral("Cancelled: adapter is stopping");
+                return false;
+            }
             const HttpResult entryResult = sendSoapRequest(m_network.get(),
                                                            baseUrl,
                                                            QString::fromLatin1(kHostsControlPath),
