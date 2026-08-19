@@ -7,7 +7,6 @@
 #include <iostream>
 #include <memory>
 #include <optional>
-#include <unordered_set>
 #include <string>
 #include <thread>
 
@@ -28,6 +27,7 @@
 #include <QUrl>
 #include <QXmlStreamReader>
 
+#include "phi/adapter/sdk/qt/instance_execution_backend_qt.h"
 #include "phi/adapter/sdk/qt/sidecar_driver_qt.h"
 #include "phi/adapter/sdk/sidecar.h"
 
@@ -384,7 +384,25 @@ public:
         m_lastPollErrorLogMs = 0;
         m_nextPollDueMs = 0;
         setConnected(false);
+
+        // Created here, on this instance's execution thread, so the timer fires
+        // on the same thread that owns m_network and runs every other instance
+        // callback. Driving tick() from the host thread instead would race with
+        // those callbacks over the whole instance state.
+        m_pollTimer = std::make_unique<QTimer>();
+        QObject::connect(m_pollTimer.get(), &QTimer::timeout, [this]() { tick(); });
+        m_pollTimer->start(kTickIntervalMs);
         return true;
+    }
+
+    void stop() override
+    {
+        m_started = false;
+        // Both are thread-affine and belong to this thread; the SDK calls stop()
+        // on it before the execution backend goes away.
+        m_pollTimer.reset();
+        m_network.reset();
+        sdk::AdapterInstance::stop();
     }
 
     void onConfigChanged(const sdk::ConfigChangedRequest &request) override
@@ -708,6 +726,11 @@ public:
             std::cerr << "fritz-ipc onSceneInvoke sendResult failed: " << error << '\n';
     }
 
+private:
+    // Poll due-times are checked at this granularity; the actual interval comes
+    // from pollIntervalMs / retryIntervalMs via scheduleNextPoll().
+    static constexpr int kTickIntervalMs = 100;
+
     void tick()
     {
         if (!m_started)
@@ -721,7 +744,6 @@ public:
         scheduleNextPoll();
     }
 
-private:
     static QMap<QString, QJsonObject> knownHostMapFromMeta(const QJsonObject &meta)
     {
         QMap<QString, QJsonObject> map;
@@ -1884,6 +1906,7 @@ private:
 
 private:
     std::unique_ptr<QNetworkAccessManager> m_network;
+    std::unique_ptr<QTimer> m_pollTimer;
     v1::Adapter m_info;
     QJsonObject m_meta;
     QSet<QString> m_trackedMacs;
@@ -1907,10 +1930,15 @@ private:
 class FritzIpcFactory final : public sdk::AdapterFactory
 {
 public:
-    void tickInstances()
+    // TR-064 polling blocks in nested event loops; on the SDK's default
+    // (plain-thread) backend those instance callbacks had no Qt event loop of
+    // their own. A Qt backend gives every instance its own event loop, which is
+    // also what QNetworkAccessManager and the poll timer need.
+    std::unique_ptr<sdk::InstanceExecutionBackend> createInstanceExecutionBackend(
+        const sdk::ExternalId &externalId) override
     {
-        for (const auto instance : m_instances)
-            instance->tick();
+        (void)externalId;
+        return sdk::qt::createInstanceExecutionBackend();
     }
 
     v1::Utf8String pluginType() const override
@@ -1989,21 +2017,9 @@ public:
 
     std::unique_ptr<sdk::AdapterInstance> createInstance(const sdk::ExternalId &externalId) override
     {
-        auto created = std::make_unique<FritzIpcInstance>();
         (void)externalId;
-        m_instances.insert(created.get());
-        return created;
+        return std::make_unique<FritzIpcInstance>();
     }
-
-    void destroyInstance(std::unique_ptr<sdk::AdapterInstance> instance) override
-    {
-        if (auto *typed = dynamic_cast<FritzIpcInstance *>(instance.get()))
-            m_instances.erase(typed);
-        sdk::AdapterFactory::destroyInstance(std::move(instance));
-    }
-
-private:
-    std::unordered_set<FritzIpcInstance *> m_instances;
 };
 
 } // namespace
@@ -2037,12 +2053,6 @@ int main(int argc, char **argv)
         std::cerr << "failed to start sidecar host: " << error << '\n';
         return 1;
     }
-
-    // Instance ticks used to ride on the poll loop; they get their own timer
-    // now (the tick handler throttles itself internally).
-    QTimer tickTimer;
-    QObject::connect(&tickTimer, &QTimer::timeout, [&factory]() { factory.tickInstances(); });
-    tickTimer.start(100);
 
     // Signal handlers only flip a flag; a slow timer turns it into a clean
     // Qt shutdown.
