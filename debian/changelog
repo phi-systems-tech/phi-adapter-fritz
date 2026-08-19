@@ -1,4 +1,4 @@
-phi-adapter-fritz (0.0~git20260819.1eb8589-1) trixie; urgency=medium
+phi-adapter-fritz (0.0~git202608191934.1eb8589-1) trixie; urgency=medium
 
   * Abort in-flight SOAP calls when the adapter is stopping: the nested request
     loop polls the stop request, and the per-host loop no longer runs for
