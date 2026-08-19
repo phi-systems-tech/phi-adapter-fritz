@@ -1,3 +1,12 @@
+phi-adapter-fritz (0.0~git20260819.1eb8589-1) trixie; urgency=medium
+
+  * Abort in-flight SOAP calls when the adapter is stopping: the nested request
+    loop polls the stop request, and the per-host loop no longer runs for
+    total x 3s after a stop (F-33).
+  * Rebuild against phi-adapter-sdk 0.5.0.
+
+ -- Marius Schumacher <marius.schumacher@phisys.com>  Wed, 19 Aug 2026 18:10:56 +0200
+
 phi-adapter-fritz (0.0~git20260819.99c39eb-1) trixie; urgency=medium
 
   * Run adapter instances on a Qt execution backend: the blocking TR-064 calls no
