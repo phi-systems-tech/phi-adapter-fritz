@@ -1,3 +1,13 @@
+phi-adapter-fritz (0.0~git20260819.99c39eb-1) trixie; urgency=medium
+
+  * Run adapter instances on a Qt execution backend: the blocking TR-064 calls no
+    longer occupy the host poll thread (F-32).
+  * Each instance drives its own poll timer on its execution thread; the
+    host-thread tick that raced with instance callbacks is gone (F-32).
+  * Rebuild against phi-adapter-sdk 0.4.0 (AdapterFactory vtable change).
+
+ -- Marius Schumacher <marius.schumacher@phisys.com>  Wed, 19 Aug 2026 16:49:03 +0200
+
 phi-adapter-fritz (0.0~git20260819.d2bdfc4-1) trixie; urgency=medium
 
   * Drive the sidecar from the Qt event loop; adds the phi-adapter-sdk-qt dependency.
