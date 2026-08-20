@@ -63,7 +63,12 @@ if(PHI_ADAPTER_FRITZ_BUILD_IPC)
     endif()
 
     add_executable(phi_adapter_fritz_ipc
-        src/fritzipcmain.cpp
+        src/main.cpp
+        src/fritz_http.cpp
+        src/fritz_runtime_convert.cpp
+        src/fritz_schema.cpp
+        src/fritz_sidecar.cpp
+        src/fritz_tr064.cpp
     )
 
     target_compile_features(phi_adapter_fritz_ipc PRIVATE cxx_std_20)

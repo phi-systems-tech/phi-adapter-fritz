@@ -1,374 +1,36 @@
-#include <atomic>
+#include "fritz_sidecar.h"
+
 #include <algorithm>
-#include <chrono>
-#include <csignal>
-#include <cstdlib>
-#include <functional>
+#include <cstdint>
 #include <iostream>
 #include <memory>
 #include <optional>
 #include <string>
-#include <thread>
+#include <utility>
 
-#include <QAuthenticator>
-#include <QCoreApplication>
-#include <QDateTime>
-#include <QEventLoop>
 #include <QJsonArray>
-#include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonValue>
+#include <QList>
 #include <QMap>
-#include <QNetworkAccessManager>
-#include <QNetworkReply>
-#include <QNetworkRequest>
 #include <QSet>
+#include <QString>
 #include <QStringList>
 #include <QTimer>
 #include <QUrl>
-#include <QXmlStreamReader>
+#include <QtGlobal>
 
-#include "phi/adapter/sdk/qt/instance_execution_backend_qt.h"
-#include "phi/adapter/sdk/qt/sidecar_driver_qt.h"
-#include "phi/adapter/sdk/sidecar.h"
+#include "fritz_http.h"
+#include "fritz_runtime_convert.h"
+#include "fritz_schema.h"
+#include "fritz_tr064.h"
+
+namespace phicore::fritz::ipc {
 
 namespace v1 = phicore::adapter::v1;
 namespace sdk = phicore::adapter::sdk;
 
 namespace {
-
-constexpr const char kPluginType[] = "fritz";
-constexpr std::uint16_t kDefaultTr064Port = 49000;
-constexpr const char kRouterDeviceId[] = "router";
-constexpr const char kDeviceSoftwareUpdateChannelId[] = "device_software_update";
-constexpr const char kHostsServiceType[] = "urn:dslforum-org:service:Hosts:1";
-constexpr const char kHostsControlPath[] = "/upnp/control/hosts";
-constexpr const char kDeviceInfoServiceType[] = "urn:dslforum-org:service:DeviceInfo:1";
-constexpr const char kDeviceInfoControlPath[] = "/upnp/control/deviceinfo";
-constexpr const char kWanCommonServiceType[] = "urn:dslforum-org:service:WANCommonInterfaceConfig:1";
-constexpr const char kWanCommonControlPath[] = "/upnp/control/wancommonifconfig";
-constexpr const char kWlan24ServiceType[] = "urn:dslforum-org:service:WLANConfiguration:1";
-constexpr const char kWlan24ControlPath[] = "/upnp/control/wlanconfig1";
-constexpr const char kWlan5ServiceType[] = "urn:dslforum-org:service:WLANConfiguration:2";
-constexpr const char kWlan5ControlPath[] = "/upnp/control/wlanconfig2";
-
-constexpr const char kFritzIconSvg[] =
-    "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" xmlns=\"http://www.w3.org/2000/svg\" role=\"img\" aria-label=\"FRITZ!Box logo\">"
-    "<rect x=\"4\" y=\"4\" width=\"16\" height=\"16\" rx=\"2\" fill=\"#FFD84D\" transform=\"rotate(45 12 12)\"/>"
-    "<text x=\"12\" y=\"15\" text-anchor=\"middle\" font-family=\"'Geist', 'Inter', 'Arial', sans-serif\" font-weight=\"700\" font-size=\"8.5\" fill=\"#D94A4A\">FRITZ!</text>"
-    "</svg>";
-
-std::atomic_bool g_running{true};
-
-void handleSignal(int)
-{
-    g_running.store(false);
-}
-
-std::int64_t nowMs()
-{
-    return QDateTime::currentMSecsSinceEpoch();
-}
-
-QJsonObject parseJsonObject(const std::string &text)
-{
-    if (text.empty())
-        return {};
-    QJsonParseError error{};
-    const QJsonDocument doc = QJsonDocument::fromJson(QByteArray::fromStdString(text), &error);
-    if (error.error != QJsonParseError::NoError || !doc.isObject())
-        return {};
-    return doc.object();
-}
-
-std::string toJson(const QJsonObject &obj)
-{
-    return QJsonDocument(obj).toJson(QJsonDocument::Compact).toStdString();
-}
-
-QString normalizeMac(const QString &mac)
-{
-    return mac.trimmed().toLower();
-}
-
-quint16 parsePortValue(const QJsonValue &value)
-{
-    int parsed = 0;
-    bool ok = false;
-    if (value.isDouble()) {
-        parsed = value.toInt();
-        ok = true;
-    } else if (value.isString()) {
-        parsed = value.toString().trimmed().toInt(&ok);
-    }
-    if (!ok || parsed <= 0 || parsed > 65535)
-        return 0;
-    return static_cast<quint16>(parsed);
-}
-
-QSet<QString> parseTrackedMacSelection(const QJsonValue &value)
-{
-    QSet<QString> out;
-    auto addValue = [&out](const QJsonValue &entry) {
-        QString mac;
-        if (entry.isString()) {
-            mac = normalizeMac(entry.toString());
-        } else if (entry.isObject()) {
-            const QJsonObject obj = entry.toObject();
-            mac = normalizeMac(obj.value(QStringLiteral("value")).toString());
-            if (mac.isEmpty())
-                mac = normalizeMac(obj.value(QStringLiteral("mac")).toString());
-        }
-        if (!mac.isEmpty())
-            out.insert(mac);
-    };
-
-    if (value.isArray()) {
-        const QJsonArray arr = value.toArray();
-        for (const QJsonValue &entry : arr)
-            addValue(entry);
-        return out;
-    }
-
-    addValue(value);
-    return out;
-}
-
-QJsonArray sortedMacArray(const QSet<QString> &macs)
-{
-    QStringList sorted;
-    sorted.reserve(macs.size());
-    for (const QString &mac : macs)
-        sorted.push_back(mac);
-    std::sort(sorted.begin(), sorted.end(), [](const QString &a, const QString &b) {
-        return a.localeAwareCompare(b) < 0;
-    });
-    QJsonArray out;
-    for (const QString &mac : sorted)
-        out.append(mac);
-    return out;
-}
-
-bool isTruthy(const QString &value)
-{
-    const QString normalized = value.trimmed().toLower();
-    return normalized == QLatin1String("1") || normalized == QLatin1String("true");
-}
-
-QString toSoapBoolean(bool enabled)
-{
-    return enabled ? QStringLiteral("1") : QStringLiteral("0");
-}
-
-std::optional<bool> scalarToBool(const v1::ScalarValue &value)
-{
-    if (const auto *v = std::get_if<bool>(&value))
-        return *v;
-    if (const auto *v = std::get_if<std::int64_t>(&value))
-        return *v != 0;
-    if (const auto *v = std::get_if<double>(&value))
-        return *v != 0.0;
-    if (const auto *v = std::get_if<v1::Utf8String>(&value)) {
-        const QString text = QString::fromStdString(*v).trimmed().toLower();
-        if (text == QLatin1String("true") || text == QLatin1String("1") || text == QLatin1String("on"))
-            return true;
-        if (text == QLatin1String("false") || text == QLatin1String("0") || text == QLatin1String("off"))
-            return false;
-    }
-    return std::nullopt;
-}
-
-v1::AdapterConfigOptionList buildTrackedOptions(const QJsonObject &meta)
-{
-    v1::AdapterConfigOptionList options;
-    QSet<QString> seen;
-
-    const QJsonValue knownValue = meta.value(QStringLiteral("knownHosts"));
-    if (knownValue.isArray()) {
-        const QJsonArray arr = knownValue.toArray();
-        for (const QJsonValue &entry : arr) {
-            if (entry.isString()) {
-                const QString mac = normalizeMac(entry.toString());
-                if (mac.isEmpty() || seen.contains(mac))
-                    continue;
-                seen.insert(mac);
-                options.push_back({mac.toStdString(), mac.toStdString()});
-                continue;
-            }
-            if (!entry.isObject())
-                continue;
-            const QJsonObject obj = entry.toObject();
-            const QString mac = normalizeMac(obj.value(QStringLiteral("mac")).toString());
-            if (mac.isEmpty() || seen.contains(mac))
-                continue;
-            seen.insert(mac);
-
-            const QString name = obj.value(QStringLiteral("name")).toString().trimmed();
-            const QString ip = obj.value(QStringLiteral("ip")).toString().trimmed();
-
-            QString label;
-            if (!ip.isEmpty() && !name.isEmpty()) {
-                label = QStringLiteral("%1 (%2)").arg(name, ip);
-            } else if (!ip.isEmpty()) {
-                label = ip;
-            } else if (!name.isEmpty()) {
-                label = name;
-            } else {
-                label = mac;
-            }
-            options.push_back({mac.toStdString(), label.toStdString()});
-        }
-    }
-
-    const QSet<QString> trackedMacs = parseTrackedMacSelection(meta.value(QStringLiteral("trackedMacs")));
-    for (const QString &mac : trackedMacs) {
-        if (mac.isEmpty() || seen.contains(mac))
-            continue;
-        seen.insert(mac);
-        options.push_back({mac.toStdString(), mac.toStdString()});
-    }
-
-    return options;
-}
-
-QJsonObject buildFritzConfigSchemaObject()
-{
-    auto field = [](const QString &key,
-                    const QString &type,
-                    const QString &label,
-                    const QJsonValue &defaultValue = QJsonValue(),
-                    const QString &actionId = QString(),
-                    const QString &actionLabel = QString(),
-                    const QString &parentActionId = QString(),
-                    const QJsonArray &flags = QJsonArray(),
-                    const QJsonArray &choices = QJsonArray(),
-                    const QJsonObject &layout = QJsonObject()) {
-        QJsonObject obj;
-        obj.insert(QStringLiteral("key"), key);
-        obj.insert(QStringLiteral("type"), type);
-        obj.insert(QStringLiteral("label"), label);
-        if (!defaultValue.isUndefined() && !defaultValue.isNull())
-            obj.insert(QStringLiteral("default"), defaultValue);
-        if (!actionId.isEmpty())
-            obj.insert(QStringLiteral("actionId"), actionId);
-        if (!actionLabel.isEmpty())
-            obj.insert(QStringLiteral("actionLabel"), actionLabel);
-        if (!parentActionId.isEmpty())
-            obj.insert(QStringLiteral("parentActionId"), parentActionId);
-        if (!flags.isEmpty())
-            obj.insert(QStringLiteral("flags"), flags);
-        if (!choices.isEmpty())
-            obj.insert(QStringLiteral("choices"), choices);
-        if (!layout.isEmpty())
-            obj.insert(QStringLiteral("layout"), layout);
-        return obj;
-    };
-
-    QJsonArray factoryFields;
-    factoryFields.append(field(QStringLiteral("host"),
-                              QStringLiteral("Hostname"),
-                              QStringLiteral("Host"),
-                              QJsonValue(),
-                              QString(),
-                              QString(),
-                              QString(),
-                              QJsonArray{QStringLiteral("Required")}));
-    factoryFields.append(field(QStringLiteral("tr064Port"),
-                              QStringLiteral("Integer"),
-                              QStringLiteral("TR-064 port"),
-                              static_cast<int>(kDefaultTr064Port)));
-    factoryFields.append(field(QStringLiteral("user"),
-                              QStringLiteral("String"),
-                              QStringLiteral("Username"),
-                              QJsonValue(),
-                              QString(),
-                              QString(),
-                              QString(),
-                              QJsonArray{QStringLiteral("Required")}));
-    factoryFields.append(field(QStringLiteral("password"),
-                              QStringLiteral("Password"),
-                              QStringLiteral("Password"),
-                              QJsonValue(),
-                              QString(),
-                              QString(),
-                              QString(),
-                              QJsonArray{QStringLiteral("Required"), QStringLiteral("Secret")}));
-    factoryFields.append(field(QStringLiteral("pollIntervalMs"),
-                              QStringLiteral("Integer"),
-                              QStringLiteral("Poll interval"),
-                              5000));
-    factoryFields.append(field(QStringLiteral("retryIntervalMs"),
-                              QStringLiteral("Integer"),
-                              QStringLiteral("Retry interval"),
-                              10000));
-
-    QJsonArray instanceFields;
-    instanceFields.append(field(QStringLiteral("trackedMacs"),
-                               QStringLiteral("Select"),
-                               QStringLiteral("Tracked devices"),
-                               QJsonArray(),
-                               QStringLiteral("browseHosts"),
-                               QStringLiteral("Probe WLAN"),
-                               QStringLiteral("settings"),
-                               QJsonArray{QStringLiteral("Multi"), QStringLiteral("InstanceOnly")},
-                               QJsonArray(),
-                               QJsonObject{
-                                   {QStringLiteral("labelPosition"), QStringLiteral("top")},
-                                   {QStringLiteral("actionPosition"), QStringLiteral("below")},
-                               }));
-
-    QJsonObject factorySection;
-    factorySection.insert(QStringLiteral("title"), QStringLiteral("FRITZ!Box"));
-    factorySection.insert(QStringLiteral("description"),
-                         QStringLiteral("Connect via TR-064 to track network clients."));
-    factorySection.insert(QStringLiteral("fields"), factoryFields);
-
-    QJsonObject instanceSection;
-    instanceSection.insert(QStringLiteral("title"), QStringLiteral("FRITZ!Box"));
-    instanceSection.insert(QStringLiteral("description"),
-                          QStringLiteral("Connect via TR-064 to track network clients."));
-    instanceSection.insert(QStringLiteral("fields"), instanceFields);
-
-    QJsonObject schema;
-    schema.insert(QStringLiteral("factory"), factorySection);
-    schema.insert(QStringLiteral("instance"), instanceSection);
-    return schema;
-}
-
-struct HostEntry {
-    QString mac;
-    QString name;
-    QString ip;
-    QString interfaceType;
-    bool active = false;
-    bool hasSignal = false;
-    int signalDbm = 0;
-};
-
-struct RouterSnapshot {
-    bool hasUptime = false;
-    qint64 uptimeSec = 0;
-    bool hasSoftwareVersion = false;
-    QString softwareVersion;
-    bool hasUpdateAvailable = false;
-    bool updateAvailable = false;
-    bool hasWlan24 = false;
-    bool wlan24Enabled = false;
-    bool hasWlan5 = false;
-    bool wlan5Enabled = false;
-    bool hasTxRate = false;
-    double txRateKbit = 0.0;
-    bool hasRxRate = false;
-    double rxRateKbit = 0.0;
-    QString friendlyName;
-};
-
-struct HttpResult {
-    bool success = false;
-    QByteArray payload;
-    QNetworkReply::NetworkError networkError = QNetworkReply::NoError;
-    int statusCode = 0;
-    QString error;
-};
 
 class FritzIpcInstance final : public sdk::AdapterInstance
 {
@@ -386,7 +48,7 @@ public:
         setConnected(false);
 
         // Created here, on this instance's execution thread, so the timer fires
-        // on the same thread that owns m_network and runs every other instance
+        // on the same thread that owns m_http and runs every other instance
         // callback. Driving tick() from the host thread instead would race with
         // those callbacks over the whole instance state.
         m_pollTimer = std::make_unique<QTimer>();
@@ -401,7 +63,7 @@ public:
         // Both are thread-affine and belong to this thread; the SDK calls stop()
         // on it before the execution backend goes away.
         m_pollTimer.reset();
-        m_network.reset();
+        m_http.reset();
         sdk::AdapterInstance::stop();
     }
 
@@ -412,7 +74,7 @@ public:
         m_meta = parseJsonObject(request.adapter.metaJson);
         refreshConfig();
         m_started = true;
-        ensureNetworkManager();
+        ensureHttp();
 
         std::cerr << "fritz-ipc config.changed adapterId=" << request.adapterId
                   << " externalId=" << m_info.externalId
@@ -777,261 +439,19 @@ private:
         return map;
     }
 
-    void ensureNetworkManager()
+
+    // Creates the client on first use and re-pushes credentials every time, so
+    // a changed user/password takes effect on the next request - the previous
+    // QNetworkAccessManager read them from m_info at challenge time and got
+    // that for free.
+    void ensureHttp()
     {
-        if (m_network)
-            return;
-        m_network = std::make_unique<QNetworkAccessManager>();
-        QObject::connect(m_network.get(),
-                         &QNetworkAccessManager::authenticationRequired,
-                         [this](QNetworkReply *, QAuthenticator *auth) {
-                             if (!auth)
-                                 return;
-                             const QString user = QString::fromStdString(m_info.user).trimmed();
-                             if (!user.isEmpty())
-                                 auth->setUser(user);
-                             auth->setPassword(QString::fromStdString(m_info.password));
-                         });
-    }
-
-    static QByteArray buildSoapEnvelope(const QString &serviceType,
-                                        const QString &action,
-                                        const QMap<QString, QString> &params)
-    {
-        QString body;
-        body += QStringLiteral("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
-        body += QStringLiteral("<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" ");
-        body += QStringLiteral("s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">");
-        body += QStringLiteral("<s:Body>");
-        body += QStringLiteral("<u:%1 xmlns:u=\"%2\">").arg(action, serviceType);
-        for (auto it = params.cbegin(); it != params.cend(); ++it)
-            body += QStringLiteral("<%1>%2</%1>").arg(it.key(), it.value());
-        body += QStringLiteral("</u:%1>").arg(action);
-        body += QStringLiteral("</s:Body>");
-        body += QStringLiteral("</s:Envelope>");
-        return body.toUtf8();
-    }
-
-    // Not static: it consults stopRequested() so a shutdown does not have to wait
-    // out the request timeout (F-33).
-    HttpResult waitForReply(QNetworkReply *reply, int timeoutMs)
-    {
-        HttpResult result;
-        if (!reply) {
-            result.error = QStringLiteral("No reply object");
-            return result;
+        if (!m_http) {
+            m_http = std::make_unique<FritzHttp>();
+            m_http->setCancelProbe([this]() { return stopRequested(); });
         }
-        if (stopRequested()) {
-            reply->abort();
-            result.error = QStringLiteral("Cancelled: adapter is stopping");
-            reply->deleteLater();
-            return result;
-        }
-
-        QTimer timeout;
-        timeout.setSingleShot(true);
-        timeout.start(timeoutMs);
-
-        bool cancelled = false;
-        QTimer cancelPoll;
-        cancelPoll.setInterval(kCancelPollIntervalMs);
-
-        QEventLoop loop;
-        QObject::connect(&cancelPoll, &QTimer::timeout, &loop, [this, &loop, &cancelled]() {
-            if (!stopRequested())
-                return;
-            cancelled = true;
-            loop.quit();
-        });
-        cancelPoll.start();
-        QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
-        QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
-        loop.exec();
-
-        if (cancelled) {
-            reply->abort();
-            result.error = QStringLiteral("Cancelled: adapter is stopping");
-            reply->deleteLater();
-            return result;
-        }
-
-        if (!timeout.isActive()) {
-            reply->abort();
-            result.error = QStringLiteral("Connection timed out");
-            reply->deleteLater();
-            return result;
-        }
-
-        result.payload = reply->readAll();
-        result.networkError = reply->error();
-        result.statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-        result.error = reply->errorString();
-        result.success = (result.networkError == QNetworkReply::NoError);
-        reply->deleteLater();
-        return result;
-    }
-
-    HttpResult sendSoapRequest(QNetworkAccessManager *manager,
-                                      const QString &baseUrl,
-                                      const QString &controlPath,
-                                      const QString &serviceType,
-                                      const QString &action,
-                                      const QMap<QString, QString> &params = {},
-                                      int timeoutMs = 3000)
-    {
-        HttpResult result;
-        if (!manager) {
-            result.error = QStringLiteral("Network manager not initialized");
-            return result;
-        }
-
-        QNetworkRequest request(QUrl(baseUrl + controlPath));
-        request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("text/xml; charset=\"utf-8\""));
-        request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-        const QString soapAction = QStringLiteral("\"%1#%2\"").arg(serviceType, action);
-        request.setRawHeader("SOAPAction", soapAction.toUtf8());
-
-        return waitForReply(manager->post(request, buildSoapEnvelope(serviceType, action, params)), timeoutMs);
-    }
-
-    HttpResult sendGetRequest(QNetworkAccessManager *manager,
-                                     const QString &url,
-                                     int timeoutMs = 3000)
-    {
-        HttpResult result;
-        if (!manager) {
-            result.error = QStringLiteral("Network manager not initialized");
-            return result;
-        }
-
-        QNetworkRequest request{QUrl(url)};
-        request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-        return waitForReply(manager->get(request), timeoutMs);
-    }
-
-    static bool parseSoapValue(const QByteArray &payload, const QString &key, QString *value)
-    {
-        if (!value)
-            return false;
-
-        QXmlStreamReader reader(payload);
-        while (!reader.atEnd()) {
-            reader.readNext();
-            if (reader.isStartElement() && reader.name() == key) {
-                *value = reader.readElementText().trimmed();
-                return true;
-            }
-        }
-        return false;
-    }
-
-    static bool parseHostListPath(const QByteArray &payload, QString *path, QString *error)
-    {
-        if (!path)
-            return false;
-
-        QXmlStreamReader reader(payload);
-        while (!reader.atEnd()) {
-            reader.readNext();
-            if (reader.isStartElement() && reader.name() == QLatin1String("NewHostListPath")) {
-                *path = reader.readElementText().trimmed();
-                return true;
-            }
-        }
-
-        if (error)
-            *error = reader.hasError() ? reader.errorString() : QStringLiteral("Host list path missing");
-        return false;
-    }
-
-    static bool parseHostEntryFromSoap(const QByteArray &payload, HostEntry *entry)
-    {
-        if (!entry)
-            return false;
-
-        QXmlStreamReader reader(payload);
-        bool foundMac = false;
-        while (!reader.atEnd()) {
-            reader.readNext();
-            if (!reader.isStartElement())
-                continue;
-
-            const QStringView name = reader.name();
-            if (name == QLatin1String("NewMACAddress")) {
-                entry->mac = reader.readElementText().trimmed();
-                foundMac = true;
-            } else if (name == QLatin1String("NewHostName")) {
-                entry->name = reader.readElementText().trimmed();
-            } else if (name == QLatin1String("NewIPAddress")) {
-                entry->ip = reader.readElementText().trimmed();
-            } else if (name == QLatin1String("NewActive")) {
-                entry->active = isTruthy(reader.readElementText());
-            } else if (name == QLatin1String("NewInterfaceType")) {
-                entry->interfaceType = reader.readElementText().trimmed();
-            } else if (name == QLatin1String("NewSignalStrength")) {
-                const QString value = reader.readElementText().trimmed();
-                bool ok = false;
-                const int signal = value.toInt(&ok);
-                if (ok) {
-                    entry->hasSignal = true;
-                    entry->signalDbm = signal;
-                }
-            }
-        }
-        return foundMac;
-    }
-
-    static QList<HostEntry> parseHostList(const QByteArray &payload)
-    {
-        QList<HostEntry> hosts;
-        QXmlStreamReader reader(payload);
-        HostEntry current;
-        bool inHost = false;
-
-        while (!reader.atEnd()) {
-            reader.readNext();
-            if (reader.isStartElement()) {
-                const QStringView name = reader.name();
-                if (name == QLatin1String("Host")) {
-                    current = HostEntry();
-                    inHost = true;
-                } else if (inHost) {
-                    if (name == QLatin1String("MACAddress")) {
-                        current.mac = reader.readElementText().trimmed();
-                    } else if (name == QLatin1String("HostName")) {
-                        current.name = reader.readElementText().trimmed();
-                    } else if (name == QLatin1String("IPAddress")) {
-                        current.ip = reader.readElementText().trimmed();
-                    } else if (name == QLatin1String("Active")) {
-                        current.active = isTruthy(reader.readElementText());
-                    } else if (name == QLatin1String("SignalStrength")) {
-                        const QString value = reader.readElementText().trimmed();
-                        bool ok = false;
-                        const int signal = value.toInt(&ok);
-                        if (ok) {
-                            current.hasSignal = true;
-                            current.signalDbm = signal;
-                        }
-                    } else if (name == QLatin1String("InterfaceType")) {
-                        current.interfaceType = reader.readElementText().trimmed();
-                    }
-                }
-            } else if (reader.isEndElement() && reader.name() == QLatin1String("Host")) {
-                if (!current.mac.isEmpty()) {
-                    current.mac = normalizeMac(current.mac);
-                    hosts.push_back(current);
-                }
-                inHost = false;
-            }
-        }
-
-        return hosts;
-    }
-
-    static bool isInvalidActionFault(const QByteArray &payload)
-    {
-        const QByteArray lower = payload.toLower();
-        return lower.contains("invalid action") || lower.contains("<errorcode>401</errorcode>");
+        m_http->setCredentials(QString::fromStdString(m_info.user),
+                               QString::fromStdString(m_info.password));
     }
 
     QString resolvedHost() const
@@ -1171,26 +591,22 @@ private:
                          bool useTls,
                          QString *error)
     {
-        QNetworkAccessManager manager;
-        QObject::connect(&manager,
-                         &QNetworkAccessManager::authenticationRequired,
-                         [&user, &password](QNetworkReply *, QAuthenticator *auth) {
-                             if (!auth)
-                                 return;
-                             if (!user.isEmpty())
-                                 auth->setUser(user);
-                             auth->setPassword(password);
-                         });
+        // A throwaway client: the probe validates credentials that are not the
+        // instance's own yet. It still needs the cancel probe, or a shutdown
+        // waits out the request timeout (F-33).
+        FritzHttp http;
+        http.setCredentials(user, password);
+        http.setCancelProbe([this]() { return stopRequested(); });
 
         const QString baseUrl = QStringLiteral("%1://%2:%3")
             .arg(useTls ? QStringLiteral("https") : QStringLiteral("http"), host)
             .arg(port > 0 ? port : static_cast<quint16>(kDefaultTr064Port));
 
-        const HttpResult result = sendSoapRequest(&manager,
-                                                  baseUrl,
-                                                  QString::fromLatin1(kDeviceInfoControlPath),
-                                                  QString::fromLatin1(kDeviceInfoServiceType),
-                                                  QStringLiteral("GetInfo"));
+        const HttpResult result = http.sendSoap(
+                                       baseUrl,
+                                       QString::fromLatin1(kDeviceInfoControlPath),
+                                       QString::fromLatin1(kDeviceInfoServiceType),
+                                       QStringLiteral("GetInfo"));
         if (result.success)
             return true;
 
@@ -1223,7 +639,7 @@ private:
 
     bool fetchHostEntries(QList<HostEntry> &hosts, QString *error)
     {
-        ensureNetworkManager();
+        ensureHttp();
 
         const QString baseUrl = resolveBaseUrl();
         if (baseUrl.isEmpty()) {
@@ -1232,11 +648,11 @@ private:
             return false;
         }
 
-        const HttpResult countResult = sendSoapRequest(m_network.get(),
-                                                       baseUrl,
-                                                       QString::fromLatin1(kHostsControlPath),
-                                                       QString::fromLatin1(kHostsServiceType),
-                                                       QStringLiteral("GetHostNumberOfEntries"));
+        const HttpResult countResult = m_http->sendSoap(
+                                        baseUrl,
+                                        QString::fromLatin1(kHostsControlPath),
+                                        QString::fromLatin1(kHostsServiceType),
+                                        QStringLiteral("GetHostNumberOfEntries"));
         if (!countResult.success) {
             if (error)
                 *error = countResult.error;
@@ -1266,12 +682,12 @@ private:
                     *error = QStringLiteral("Cancelled: adapter is stopping");
                 return false;
             }
-            const HttpResult entryResult = sendSoapRequest(m_network.get(),
-                                                           baseUrl,
-                                                           QString::fromLatin1(kHostsControlPath),
-                                                           QString::fromLatin1(kHostsServiceType),
-                                                           QStringLiteral("GetGenericHostEntry"),
-                                                           {{QStringLiteral("NewIndex"), QString::number(index)}});
+            const HttpResult entryResult = m_http->sendSoap(
+                                            baseUrl,
+                                            QString::fromLatin1(kHostsControlPath),
+                                            QString::fromLatin1(kHostsServiceType),
+                                            QStringLiteral("GetGenericHostEntry"),
+                                            {{QStringLiteral("NewIndex"), QString::number(index)}});
             if (!entryResult.success) {
                 if (error)
                     *error = entryResult.error;
@@ -1290,7 +706,7 @@ private:
 
     bool fetchHostSnapshot(QList<HostEntry> &hosts, QString *error)
     {
-        ensureNetworkManager();
+        ensureHttp();
 
         const QString baseUrl = resolveBaseUrl();
         if (baseUrl.isEmpty()) {
@@ -1299,11 +715,11 @@ private:
             return false;
         }
 
-        const HttpResult listPathResult = sendSoapRequest(m_network.get(),
-                                                          baseUrl,
-                                                          QString::fromLatin1(kHostsControlPath),
-                                                          QString::fromLatin1(kHostsServiceType),
-                                                          QStringLiteral("GetHostListPath"));
+        const HttpResult listPathResult = m_http->sendSoap(
+                                           baseUrl,
+                                           QString::fromLatin1(kHostsControlPath),
+                                           QString::fromLatin1(kHostsServiceType),
+                                           QStringLiteral("GetHostListPath"));
         if (!listPathResult.success) {
             if (isInvalidActionFault(listPathResult.payload))
                 return fetchHostEntries(hosts, error);
@@ -1331,7 +747,7 @@ private:
         const QString listUrl = listPath.startsWith(QLatin1Char('/'))
             ? (baseUrl + listPath)
             : (baseUrl + QLatin1Char('/') + listPath);
-        const HttpResult listResult = sendGetRequest(m_network.get(), listUrl);
+        const HttpResult listResult = m_http->sendGet(listUrl);
         if (!listResult.success) {
             if (error)
                 *error = listResult.error;
@@ -1352,7 +768,7 @@ private:
 
     bool fetchRouterSnapshot(RouterSnapshot &snapshot, QString *error)
     {
-        ensureNetworkManager();
+        ensureHttp();
 
         const QString baseUrl = resolveBaseUrl();
         if (baseUrl.isEmpty()) {
@@ -1361,11 +777,11 @@ private:
             return false;
         }
 
-        HttpResult deviceInfo = sendSoapRequest(m_network.get(),
-                                                baseUrl,
-                                                QString::fromLatin1(kDeviceInfoControlPath),
-                                                QString::fromLatin1(kDeviceInfoServiceType),
-                                                QStringLiteral("GetInfo"));
+        HttpResult deviceInfo = m_http->sendSoap(
+                                 baseUrl,
+                                 QString::fromLatin1(kDeviceInfoControlPath),
+                                 QString::fromLatin1(kDeviceInfoServiceType),
+                                 QStringLiteral("GetInfo"));
         if (deviceInfo.success) {
             QString value;
             if (parseSoapValue(deviceInfo.payload, QStringLiteral("NewUpTime"), &value)) {
@@ -1394,11 +810,11 @@ private:
             }
         }
 
-        HttpResult updateInfo = sendSoapRequest(m_network.get(),
-                                                baseUrl,
-                                                QString::fromLatin1(kDeviceInfoControlPath),
-                                                QString::fromLatin1(kDeviceInfoServiceType),
-                                                QStringLiteral("X_AVM-DE_GetAutoUpdateInfo"));
+        HttpResult updateInfo = m_http->sendSoap(
+                                 baseUrl,
+                                 QString::fromLatin1(kDeviceInfoControlPath),
+                                 QString::fromLatin1(kDeviceInfoServiceType),
+                                 QStringLiteral("X_AVM-DE_GetAutoUpdateInfo"));
         if (updateInfo.success) {
             QString value;
             if (parseSoapValue(updateInfo.payload, QStringLiteral("NewUpdateAvailable"), &value)) {
@@ -1407,11 +823,11 @@ private:
             }
         }
 
-        HttpResult wlan24 = sendSoapRequest(m_network.get(),
-                                            baseUrl,
-                                            QString::fromLatin1(kWlan24ControlPath),
-                                            QString::fromLatin1(kWlan24ServiceType),
-                                            QStringLiteral("GetInfo"));
+        HttpResult wlan24 = m_http->sendSoap(
+                             baseUrl,
+                             QString::fromLatin1(kWlan24ControlPath),
+                             QString::fromLatin1(kWlan24ServiceType),
+                             QStringLiteral("GetInfo"));
         if (wlan24.success) {
             QString value;
             if (parseSoapValue(wlan24.payload, QStringLiteral("NewEnable"), &value)) {
@@ -1420,11 +836,11 @@ private:
             }
         }
 
-        HttpResult wlan5 = sendSoapRequest(m_network.get(),
-                                           baseUrl,
-                                           QString::fromLatin1(kWlan5ControlPath),
-                                           QString::fromLatin1(kWlan5ServiceType),
-                                           QStringLiteral("GetInfo"));
+        HttpResult wlan5 = m_http->sendSoap(
+                            baseUrl,
+                            QString::fromLatin1(kWlan5ControlPath),
+                            QString::fromLatin1(kWlan5ServiceType),
+                            QStringLiteral("GetInfo"));
         if (wlan5.success) {
             QString value;
             if (parseSoapValue(wlan5.payload, QStringLiteral("NewEnable"), &value)) {
@@ -1433,11 +849,11 @@ private:
             }
         }
 
-        HttpResult wan = sendSoapRequest(m_network.get(),
-                                         baseUrl,
-                                         QString::fromLatin1(kWanCommonControlPath),
-                                         QString::fromLatin1(kWanCommonServiceType),
-                                         QStringLiteral("GetAddonInfos"));
+        HttpResult wan = m_http->sendSoap(
+                          baseUrl,
+                          QString::fromLatin1(kWanCommonControlPath),
+                          QString::fromLatin1(kWanCommonServiceType),
+                          QStringLiteral("GetAddonInfos"));
         if (wan.success) {
             QString value;
             if (parseSoapValue(wan.payload, QStringLiteral("NewByteSendRate"), &value)) {
@@ -1469,7 +885,7 @@ private:
 
     bool setWlanEnabled(int band, bool enabled, QString *error)
     {
-        ensureNetworkManager();
+        ensureHttp();
 
         const QString baseUrl = resolveBaseUrl();
         if (baseUrl.isEmpty()) {
@@ -1492,12 +908,12 @@ private:
             return false;
         }
 
-        const HttpResult result = sendSoapRequest(m_network.get(),
-                                                  baseUrl,
-                                                  controlPath,
-                                                  serviceType,
-                                                  QStringLiteral("SetEnable"),
-                                                  {{QStringLiteral("NewEnable"), toSoapBoolean(enabled)}});
+        const HttpResult result = m_http->sendSoap(
+                                   baseUrl,
+                                   controlPath,
+                                   serviceType,
+                                   QStringLiteral("SetEnable"),
+                                   {{QStringLiteral("NewEnable"), toSoapBoolean(enabled)}});
         if (result.success)
             return true;
 
@@ -1822,125 +1238,9 @@ private:
         }
     }
 
-    QJsonObject buildConfigSchemaObject() const
-    {
-        auto field = [](const QString &key,
-                        const QString &type,
-                        const QString &label,
-                        const QJsonValue &defaultValue = QJsonValue(),
-                        const QString &actionId = QString(),
-                        const QString &actionLabel = QString(),
-                        const QString &parentActionId = QString(),
-                        const QJsonArray &flags = QJsonArray(),
-                        const QJsonArray &choices = QJsonArray(),
-                        const QJsonObject &layout = QJsonObject()) {
-            QJsonObject obj;
-            obj.insert(QStringLiteral("key"), key);
-            obj.insert(QStringLiteral("type"), type);
-            obj.insert(QStringLiteral("label"), label);
-            if (!defaultValue.isUndefined() && !defaultValue.isNull())
-                obj.insert(QStringLiteral("default"), defaultValue);
-            if (!actionId.isEmpty())
-                obj.insert(QStringLiteral("actionId"), actionId);
-            if (!actionLabel.isEmpty())
-                obj.insert(QStringLiteral("actionLabel"), actionLabel);
-            if (!parentActionId.isEmpty())
-                obj.insert(QStringLiteral("parentActionId"), parentActionId);
-            if (!flags.isEmpty())
-                obj.insert(QStringLiteral("flags"), flags);
-            if (!choices.isEmpty())
-                obj.insert(QStringLiteral("choices"), choices);
-            if (!layout.isEmpty())
-                obj.insert(QStringLiteral("layout"), layout);
-            return obj;
-        };
-
-        QJsonArray factoryFields;
-        const QString hostDefault = resolvedHost();
-        factoryFields.append(field(QStringLiteral("host"),
-                                   QStringLiteral("Hostname"),
-                                   QStringLiteral("Host"),
-                                   hostDefault.isEmpty() ? QJsonValue() : QJsonValue(hostDefault),
-                                   QString(),
-                                   QString(),
-                                   QString(),
-                                   QJsonArray{QStringLiteral("Required")}));
-        factoryFields.append(field(QStringLiteral("tr064Port"),
-                                   QStringLiteral("Integer"),
-                                   QStringLiteral("TR-064 port"),
-                                   static_cast<int>(resolvedPort())));
-        factoryFields.append(field(QStringLiteral("user"),
-                                   QStringLiteral("String"),
-                                   QStringLiteral("Username"),
-                                   QString::fromStdString(m_info.user),
-                                   QString(),
-                                   QString(),
-                                   QString(),
-                                   QJsonArray{QStringLiteral("Required")}));
-        factoryFields.append(field(QStringLiteral("password"),
-                                   QStringLiteral("Password"),
-                                   QStringLiteral("Password"),
-                                   QJsonValue(),
-                                   QString(),
-                                   QString(),
-                                   QString(),
-                                   QJsonArray{QStringLiteral("Required"), QStringLiteral("Secret")}));
-        factoryFields.append(field(QStringLiteral("pollIntervalMs"),
-                                   QStringLiteral("Integer"),
-                                   QStringLiteral("Poll interval"),
-                                   m_pollIntervalMs));
-        factoryFields.append(field(QStringLiteral("retryIntervalMs"),
-                                   QStringLiteral("Integer"),
-                                   QStringLiteral("Retry interval"),
-                                   m_retryIntervalMs));
-
-        QJsonArray trackedChoices;
-        const v1::AdapterConfigOptionList trackedOptions = buildTrackedOptions(m_meta);
-        for (const v1::AdapterConfigOption &option : trackedOptions) {
-            QJsonObject choice;
-            choice.insert(QStringLiteral("value"), QString::fromStdString(option.value));
-            choice.insert(QStringLiteral("label"), QString::fromStdString(option.label));
-            trackedChoices.append(choice);
-        }
-
-        QJsonArray trackedDefaults;
-        trackedDefaults = sortedMacArray(m_trackedMacs);
-
-        QJsonArray instanceFields;
-        instanceFields.append(field(QStringLiteral("trackedMacs"),
-                                    QStringLiteral("Select"),
-                                    QStringLiteral("Tracked devices"),
-                                    trackedDefaults,
-                                    QStringLiteral("browseHosts"),
-                                    QStringLiteral("Probe WLAN"),
-                                    QStringLiteral("settings"),
-                                    QJsonArray{QStringLiteral("Multi"), QStringLiteral("InstanceOnly")},
-                                    trackedChoices,
-                                    QJsonObject{
-                                        {QStringLiteral("labelPosition"), QStringLiteral("top")},
-                                        {QStringLiteral("actionPosition"), QStringLiteral("below")},
-                                    }));
-
-        QJsonObject factorySection;
-        factorySection.insert(QStringLiteral("title"), QStringLiteral("FRITZ!Box"));
-        factorySection.insert(QStringLiteral("description"),
-                              QStringLiteral("Connect via TR-064 to track network clients."));
-        factorySection.insert(QStringLiteral("fields"), factoryFields);
-
-        QJsonObject instanceSection;
-        instanceSection.insert(QStringLiteral("title"), QStringLiteral("FRITZ!Box"));
-        instanceSection.insert(QStringLiteral("description"),
-                               QStringLiteral("Connect via TR-064 to track network clients."));
-        instanceSection.insert(QStringLiteral("fields"), instanceFields);
-
-        QJsonObject schema;
-        schema.insert(QStringLiteral("factory"), factorySection);
-        schema.insert(QStringLiteral("instance"), instanceSection);
-        return schema;
-    }
 
 private:
-    std::unique_ptr<QNetworkAccessManager> m_network;
+    std::unique_ptr<FritzHttp> m_http;
     std::unique_ptr<QTimer> m_pollTimer;
     v1::Adapter m_info;
     QJsonObject m_meta;
@@ -1962,144 +1262,11 @@ private:
     QString m_lastPollError;
 };
 
-class FritzIpcFactory final : public sdk::AdapterFactory
-{
-public:
-    // TR-064 polling blocks in nested event loops; on the SDK's default
-    // (plain-thread) backend those instance callbacks had no Qt event loop of
-    // their own. A Qt backend gives every instance its own event loop, which is
-    // also what QNetworkAccessManager and the poll timer need.
-    std::unique_ptr<sdk::InstanceExecutionBackend> createInstanceExecutionBackend(
-        const sdk::ExternalId &externalId) override
-    {
-        (void)externalId;
-        return sdk::qt::createInstanceExecutionBackend();
-    }
-
-    v1::Utf8String pluginType() const override
-    {
-        return kPluginType;
-    }
-
-    v1::Utf8String displayName() const override
-    {
-        return "FRITZ!Box";
-    }
-
-    v1::Utf8String description() const override
-    {
-        return "AVM FRITZ!Box via TR-064 (IPC sidecar)";
-    }
-
-    v1::Utf8String apiVersion() const override
-    {
-        return v1::kProtocolLabel;
-    }
-
-    v1::Utf8String iconSvg() const override
-    {
-        return kFritzIconSvg;
-    }
-
-    int timeoutMs() const override
-    {
-        return 15000;
-    }
-
-    int maxInstances() const override
-    {
-        return 0;
-    }
-
-    v1::AdapterCapabilities capabilities() const override
-    {
-        v1::AdapterCapabilities caps;
-        caps.required = v1::AdapterRequirement::UsesRetryInterval;
-        caps.flags = v1::AdapterFlag::SupportsDiscovery
-            | v1::AdapterFlag::SupportsProbe
-            | v1::AdapterFlag::RequiresPolling;
-        caps.defaultsJson = R"({"tr064Port":49000,"pollIntervalMs":5000,"retryIntervalMs":10000})";
-
-        v1::AdapterActionDescriptor browse;
-        browse.id = "browseHosts";
-        browse.label = "Probe WLAN";
-        browse.description = "Fetch current WLAN/LAN clients";
-        browse.metaJson = R"({"placement":"form_field","kind":"command","requiresAck":true})";
-        caps.instanceActions.push_back(browse);
-
-        v1::AdapterActionDescriptor settings;
-        settings.id = "settings";
-        settings.label = "Settings";
-        settings.description = "Edit tracked devices.";
-        settings.hasForm = true;
-        settings.metaJson = R"({"placement":"card","kind":"open_dialog","requiresAck":true})";
-        caps.instanceActions.push_back(settings);
-
-        v1::AdapterActionDescriptor probe;
-        probe.id = "probe";
-        probe.label = "Test connection";
-        probe.description = "Reachability and credentials check";
-        probe.metaJson = R"({"placement":"card","kind":"command","requiresAck":true})";
-        caps.factoryActions.push_back(probe);
-
-        return caps;
-    }
-
-    v1::JsonText configSchemaJson() const override
-    {
-        return toJson(buildFritzConfigSchemaObject());
-    }
-
-    std::unique_ptr<sdk::AdapterInstance> createInstance(const sdk::ExternalId &externalId) override
-    {
-        (void)externalId;
-        return std::make_unique<FritzIpcInstance>();
-    }
-};
-
 } // namespace
 
-int main(int argc, char **argv)
+std::unique_ptr<sdk::AdapterInstance> makeInstance()
 {
-    QCoreApplication app(argc, argv);
-
-    std::signal(SIGINT, handleSignal);
-    std::signal(SIGTERM, handleSignal);
-
-    const char *envSocketPath = std::getenv("PHI_ADAPTER_SOCKET_PATH");
-    const v1::Utf8String socketPath = (argc > 1)
-        ? argv[1]
-        : (envSocketPath ? envSocketPath : v1::Utf8String("/tmp/phi-adapter-fritz-ipc.sock"));
-
-    std::cerr << "starting " << (argc > 0 && argv && argv[0] ? argv[0] : "phi_adapter_fritz")
-              << " for pluginType=" << kPluginType
-              << " socket=" << socketPath << '\n';
-
-    FritzIpcFactory factory;
-    sdk::SidecarHost host(socketPath, factory);
-
-    // The driver watches the host's poll descriptor from the Qt event loop:
-    // no polling interval, no idle wakeups, and the Qt event loop is no longer
-    // starved by a blocking poll (HTTP requests and timers run on time).
-    sdk::qt::SidecarDriver driver(host);
-
-    v1::Utf8String error;
-    if (!driver.start(&error)) {
-        std::cerr << "failed to start sidecar host: " << error << '\n';
-        return 1;
-    }
-
-    // Signal handlers only flip a flag; a slow timer turns it into a clean
-    // Qt shutdown.
-    QTimer shutdownTimer;
-    QObject::connect(&shutdownTimer, &QTimer::timeout, [&]() {
-        if (!g_running.load(std::memory_order_relaxed))
-            app.quit();
-    });
-    shutdownTimer.start(250);
-
-    const int execResult = app.exec();
-    driver.stop();
-    std::cerr << "stopping phi_adapter_fritz_ipc" << '\n';
-    return execResult;
+    return std::make_unique<FritzIpcInstance>();
 }
+
+} // namespace phicore::fritz::ipc
