@@ -81,6 +81,23 @@ if(PHI_ADAPTER_FRITZ_BUILD_IPC)
             phi::adapter-sdk-qt
     )
 
+    # The TR-064 vocabulary, tested without a router.
+    enable_testing()
+    add_executable(fritz_tr064_tests
+        tests/fritz_tr064_tests.cpp
+        src/fritz_tr064.cpp
+    )
+    target_compile_features(fritz_tr064_tests PRIVATE cxx_std_20)
+    target_include_directories(fritz_tr064_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(fritz_tr064_tests
+        PRIVATE
+            Qt6::Core
+            Qt6::Network
+            phi::adapter-sdk
+            phi::adapter-sdk-qt
+    )
+    add_test(NAME fritz_tr064_tests COMMAND fritz_tr064_tests)
+
     set_target_properties(phi_adapter_fritz_ipc PROPERTIES
         OUTPUT_NAME "phi_adapter_fritz_ipc"
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins/adapters"
