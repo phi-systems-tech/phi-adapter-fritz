@@ -1,7 +1,7 @@
-phi-adapter-fritz (0.0~git202608241355.3a63590-1) trixie; urgency=medium
+phi-adapter-fritz (0.0~git202608241635.72706f6-1) trixie; urgency=medium
 
-  * Discovery asks mDNS for _tr064._tcp as well as SSDP, so the row carries the
-    box's hostname rather than only its address.
+  * The host list is read from the document the router serves, so one request
+    fetches every host instead of one request per host on every sync.
 
- -- Marius Schumacher <google@phisys.com>  Mon, 24 Aug 2026 13:55:28 +0200
+ -- Marius Schumacher <google@phisys.com>  Mon, 24 Aug 2026 16:35:51 +0200
 
