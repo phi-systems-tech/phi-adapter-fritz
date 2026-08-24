@@ -1,6 +1,11 @@
 {
   "discovery": [
     {
+      "kind": "mdns",
+      "mdnsServiceType": "_tr064._tcp",
+      "defaultPort": 49000
+    },
+    {
       "kind": "ssdp",
       "ssdpSt": "urn:dslforum-org:device:InternetGatewayDevice:1",
       "defaultPort": 49000
