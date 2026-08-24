@@ -1,0 +1,9 @@
+{
+  "discovery": [
+    {
+      "kind": "ssdp",
+      "ssdpSt": "urn:dslforum-org:device:InternetGatewayDevice:1",
+      "defaultPort": 49000
+    }
+  ]
+}

@@ -89,4 +89,9 @@ if(PHI_ADAPTER_FRITZ_BUILD_IPC)
     install(TARGETS phi_adapter_fritz_ipc
         RUNTIME DESTINATION ${CMAKE_INSTALL_LIBDIR}/phi/plugins/adapters
     )
+
+    install(FILES
+        ${CMAKE_CURRENT_SOURCE_DIR}/fritz-config.json
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/phi/plugins/adapters
+    )
 endif()
