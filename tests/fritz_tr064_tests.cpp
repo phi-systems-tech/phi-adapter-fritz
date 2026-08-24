@@ -87,20 +87,20 @@ int main(int argc, char **argv)
     PHI_CHECK(parseHostEntryFromSoap(awayAnswer, &away));
     PHI_CHECK(!away.active);
 
-    // The bulk list, which is a different document from a different URL. The
-    // parser looks for <Host> elements. Whether that is what a FRITZ!Box
-    // actually serves at X_AVM-DE_GetHostListPath is not verified here - the
-    // document needs the router's credentials to fetch - and the adapter falls
-    // back to asking per index when this yields nothing, so a mismatch would
-    // cost one request per host and say nothing. See the note in the commit.
+    // The bulk list, which is a different document from a different URL: a
+    // <List> of <Item>, in the shape a FRITZ!Box 6850 5G on firmware 258.08.25
+    // actually serves at X_AVM-DE_GetHostListPath, AVM's own fields included.
     const QByteArray hostList = QByteArrayLiteral(
-        "<?xml version=\"1.0\"?><List>"
-        "<Host><Index>0</Index><IPAddress>192.168.1.42</IPAddress>"
-        "<MACAddress>00:11:22:AA:BB:CC</MACAddress><HostName>Kitchen tablet</HostName>"
-        "<InterfaceType>802.11</InterfaceType><Active>1</Active></Host>"
-        "<Host><Index>1</Index><IPAddress>192.168.1.43</IPAddress>"
-        "<MACAddress>00:11:22:AA:BB:CD</MACAddress><HostName>Printer</HostName>"
-        "<InterfaceType>Ethernet</InterfaceType><Active>0</Active></Host>"
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><List>"
+        "<Item><Index>1</Index><IPAddress>192.168.1.42</IPAddress>"
+        "<MACAddress>00:11:22:AA:BB:CC</MACAddress><Active>1</Active>"
+        "<HostName>Kitchen tablet</HostName><InterfaceType>802.11</InterfaceType>"
+        "<X_AVM-DE_Port>0</X_AVM-DE_Port><X_AVM-DE_Speed>0</X_AVM-DE_Speed>"
+        "<X_AVM-DE_Guest>0</X_AVM-DE_Guest></Item>"
+        "<Item><Index>2</Index><IPAddress>192.168.1.43</IPAddress>"
+        "<MACAddress>00:11:22:AA:BB:CD</MACAddress><Active>0</Active>"
+        "<HostName>Printer</HostName><InterfaceType>Ethernet</InterfaceType>"
+        "<X_AVM-DE_Port>0</X_AVM-DE_Port></Item>"
         "</List>");
     const QList<HostEntry> hosts = parseHostList(hostList);
     PHI_CHECK_MSG(hosts.size() == 2, "expected two hosts, got %d", int(hosts.size()));
@@ -112,10 +112,14 @@ int main(int argc, char **argv)
         PHI_CHECK(hosts.at(1).name == QStringLiteral("Printer"));
     }
 
-    // A document of <Item> elements - the other shape this could have been -
-    // yields nothing today, and the adapter then asks per index instead.
+    // An entry with no MAC is not an entry: it cannot be matched to anything.
     PHI_CHECK(parseHostList(QByteArrayLiteral(
-                  "<List><Item><MACAddress>00:11:22:AA:BB:CC</MACAddress></Item></List>"))
+                  "<List><Item><HostName>Nameless</HostName></Item></List>"))
+                  .isEmpty());
+    // And a document of <Host> elements - what this parser used to look for -
+    // is not what the router serves, so it yields nothing.
+    PHI_CHECK(parseHostList(QByteArrayLiteral(
+                  "<List><Host><MACAddress>00:11:22:AA:BB:CC</MACAddress></Host></List>"))
                   .isEmpty());
 
     // Older firmware answers an action it does not have with a fault, and that

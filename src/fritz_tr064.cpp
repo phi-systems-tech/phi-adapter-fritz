@@ -139,7 +139,7 @@ QList<HostEntry> parseHostList(const QByteArray &payload)
         reader.readNext();
         if (reader.isStartElement()) {
             const QStringView name = reader.name();
-            if (name == QLatin1String("Host")) {
+            if (name == QLatin1String("Item")) {
                 current = HostEntry();
                 inHost = true;
             } else if (inHost) {
@@ -163,7 +163,7 @@ QList<HostEntry> parseHostList(const QByteArray &payload)
                     current.interfaceType = reader.readElementText().trimmed();
                 }
             }
-        } else if (reader.isEndElement() && reader.name() == QLatin1String("Host")) {
+        } else if (reader.isEndElement() && reader.name() == QLatin1String("Item")) {
             if (!current.mac.isEmpty()) {
                 current.mac = normalizeMac(current.mac);
                 hosts.push_back(current);

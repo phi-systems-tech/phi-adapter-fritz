@@ -80,7 +80,11 @@ bool parseSoapValue(const QByteArray &payload, const QString &key, QString *valu
 bool parseHostListPath(const QByteArray &payload, QString *path, QString *error);
 bool parseHostEntryFromSoap(const QByteArray &payload, HostEntry *entry);
 
-/// The bulk host list fetched from the router's host-list URL.
+/// The bulk host list fetched from the router's host-list URL, which is a
+/// document of <Item> elements under a <List> - measured against a FRITZ!Box
+/// 6850 5G on firmware 258.08.25, which answers 109 of them. It used to look
+/// for <Host>, found nothing, and every sync fell back to asking the router
+/// once per host.
 QList<HostEntry> parseHostList(const QByteArray &payload);
 
 /// True for the SOAP fault older firmware returns for an unsupported action,
