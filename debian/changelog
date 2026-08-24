@@ -1,8 +1,7 @@
-phi-adapter-fritz (0.0~git202608241342.bd28834-1) trixie; urgency=medium
+phi-adapter-fritz (0.0~git202608241355.3a63590-1) trixie; urgency=medium
 
-  * Discovery looks for the box over SSDP instead of offering an empty row the
-    moment it is asked. A FRITZ!Box now appears with its address, its TR-064
-    port and its model name.
+  * Discovery asks mDNS for _tr064._tcp as well as SSDP, so the row carries the
+    box's hostname rather than only its address.
 
- -- Marius Schumacher <google@phisys.com>  Mon, 24 Aug 2026 13:42:24 +0200
+ -- Marius Schumacher <google@phisys.com>  Mon, 24 Aug 2026 13:55:28 +0200
 
