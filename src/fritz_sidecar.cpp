@@ -60,6 +60,26 @@ public:
     void stop() override
     {
         m_started = false;
+
+        // This can arrive while one of our own calls is still on the stack.
+        // A request runs a nested event loop, and a nested loop dispatches
+        // whatever is queued for this thread - including the queued stop. What
+        // used to happen then: the reset below freed the network manager, the
+        // loop returned, and the frame waiting on the reply read through freed
+        // memory. Measured as a SIGSEGV on roughly every second core restart.
+        //
+        // So the objects are left alone while a request is in flight. Nothing
+        // keeps running because of it: the cancel probe already reports the
+        // stop, so the loop gives up within one poll interval, and both objects
+        // are destroyed with the instance - after the execution backend has
+        // joined, which is the moment that guarantees nobody is inside them.
+        if (m_http && m_http->busy()) {
+            if (m_pollTimer)
+                m_pollTimer->stop();
+            sdk::AdapterInstance::stop();
+            return;
+        }
+
         // Both are thread-affine and belong to this thread; the SDK calls stop()
         // on it before the execution backend goes away.
         m_pollTimer.reset();

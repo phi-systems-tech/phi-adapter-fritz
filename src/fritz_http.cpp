@@ -6,6 +6,8 @@
 #include <QEventLoop>
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
+#include <QPointer>
+#include <QScopeGuard>
 #include <QTimer>
 #include <QUrl>
 
@@ -45,8 +47,22 @@ bool FritzHttp::cancelRequested() const
     return m_cancelProbe && m_cancelProbe();
 }
 
-HttpResult FritzHttp::waitForReply(QNetworkReply *reply, int timeoutMs)
+HttpResult FritzHttp::waitForReply(QNetworkReply *rawReply, int timeoutMs)
 {
+    // Watched rather than held. The loop below is a nested event loop on this
+    // thread, and a nested loop dispatches whatever is queued for the thread -
+    // including the host's stop, which used to destroy the network manager and
+    // with it this very reply. The loop then returned and the next line read
+    // through freed memory. Measured: SIGSEGV at 0xdd1 inside readAll(),
+    // on roughly every second core restart.
+    QPointer<QNetworkReply> reply(rawReply);
+
+    // Counted rather than a flag: sendSoap and sendGet both come through here,
+    // and a request made from inside a handler of another one would clear a
+    // flag that is still true.
+    ++m_inFlight;
+    const auto leave = qScopeGuard([this]() { --m_inFlight; });
+
     HttpResult result;
     if (!reply) {
         result.error = QStringLiteral("No reply object");
@@ -78,6 +94,15 @@ HttpResult FritzHttp::waitForReply(QNetworkReply *reply, int timeoutMs)
     QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
     QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
     loop.exec();
+
+    // It may not have survived the loop, and that is not a failure of the
+    // router: it means this adapter was told to stop while the request was in
+    // flight. Said as a cancellation, which is what it is.
+    if (!reply) {
+        result.error = QStringLiteral("Cancelled: the adapter stopped while the request was in"
+                                      " flight");
+        return result;
+    }
 
     if (cancelled) {
         reply->abort();

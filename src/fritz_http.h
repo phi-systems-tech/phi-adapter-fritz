@@ -61,6 +61,20 @@ private:
     HttpResult waitForReply(QNetworkReply *reply, int timeoutMs);
     bool cancelRequested() const;
 
+public:
+    /// Whether a request is on the stack right now.
+    ///
+    /// Asked by the instance before it destroys this object. A nested event
+    /// loop runs whatever is queued for the thread, so the host's stop can
+    /// arrive while a request is still in flight - and freeing the manager
+    /// there would pull the reply out from under the frame that is waiting on
+    /// it. The teardown is deferred instead; nothing is left running, because
+    /// the cancel probe has already told the loop to give up.
+    [[nodiscard]] bool busy() const { return m_inFlight > 0; }
+
+private:
+    int m_inFlight = 0;
+
     static constexpr int kCancelPollIntervalMs = 50;
 
     std::unique_ptr<QNetworkAccessManager> m_manager;
