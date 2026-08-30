@@ -1,3 +1,10 @@
+phi-adapter-fritz (0.0~git202608301458.0cd3c54-1) trixie; urgency=medium
+
+  * A stop arriving inside a request no longer frees the reply the
+    request is waiting on.
+
+ -- Marius Schumacher <google@phisys.com>  Sun, 30 Aug 2026 14:58:52 +0200
+
 phi-adapter-fritz (0.0~git202608241635.72706f6-1) trixie; urgency=medium
 
   * The host list is read from the document the router serves, so one request
