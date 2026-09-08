@@ -1,14 +1,17 @@
 #include "fritz_schema.h"
 
-#include <QJsonValue>
-#include <QSet>
-#include <QString>
+#include <algorithm>
+#include <set>
+#include <string>
+#include <vector>
 
-#include "fritz_runtime_convert.h"
+#include "phi/runtime/str.h"
+
 #include "fritz_tr064.h"
 
 namespace phicore::fritz::ipc {
 
+namespace str = phi::str;
 namespace v1 = phicore::adapter::v1;
 
 namespace {
@@ -19,160 +22,137 @@ constexpr const char kFritzIconSvg[] =
     "<text x=\"12\" y=\"15\" text-anchor=\"middle\" font-family=\"'Geist', 'Inter', 'Arial', sans-serif\" font-weight=\"700\" font-size=\"8.5\" fill=\"#D94A4A\">FRITZ!</text>"
     "</svg>";
 
-QJsonObject buildFritzConfigSchemaObject()
+struct FieldSpec {
+    std::string key;
+    std::string type;
+    std::string label;
+    Json defaultValue = Json();
+    std::string actionId;
+    std::string actionLabel;
+    std::string parentActionId;
+    Json flags = Json::array();
+    Json choices = Json::array();
+    Json layout = Json::object();
+};
+
+Json field(const FieldSpec &spec)
 {
-    auto field = [](const QString &key,
-                    const QString &type,
-                    const QString &label,
-                    const QJsonValue &defaultValue = QJsonValue(),
-                    const QString &actionId = QString(),
-                    const QString &actionLabel = QString(),
-                    const QString &parentActionId = QString(),
-                    const QJsonArray &flags = QJsonArray(),
-                    const QJsonArray &choices = QJsonArray(),
-                    const QJsonObject &layout = QJsonObject()) {
-        QJsonObject obj;
-        obj.insert(QStringLiteral("key"), key);
-        obj.insert(QStringLiteral("type"), type);
-        obj.insert(QStringLiteral("label"), label);
-        if (!defaultValue.isUndefined() && !defaultValue.isNull())
-            obj.insert(QStringLiteral("default"), defaultValue);
-        if (!actionId.isEmpty())
-            obj.insert(QStringLiteral("actionId"), actionId);
-        if (!actionLabel.isEmpty())
-            obj.insert(QStringLiteral("actionLabel"), actionLabel);
-        if (!parentActionId.isEmpty())
-            obj.insert(QStringLiteral("parentActionId"), parentActionId);
-        if (!flags.isEmpty())
-            obj.insert(QStringLiteral("flags"), flags);
-        if (!choices.isEmpty())
-            obj.insert(QStringLiteral("choices"), choices);
-        if (!layout.isEmpty())
-            obj.insert(QStringLiteral("layout"), layout);
-        return obj;
-    };
+    Json obj = Json::object();
+    obj["key"] = spec.key;
+    obj["type"] = spec.type;
+    obj["label"] = spec.label;
+    if (!spec.defaultValue.is_null())
+        obj["default"] = spec.defaultValue;
+    if (!spec.actionId.empty())
+        obj["actionId"] = spec.actionId;
+    if (!spec.actionLabel.empty())
+        obj["actionLabel"] = spec.actionLabel;
+    if (!spec.parentActionId.empty())
+        obj["parentActionId"] = spec.parentActionId;
+    if (!spec.flags.empty())
+        obj["flags"] = spec.flags;
+    if (!spec.choices.empty())
+        obj["choices"] = spec.choices;
+    if (!spec.layout.empty())
+        obj["layout"] = spec.layout;
+    return obj;
+}
 
-    QJsonArray factoryFields;
-    factoryFields.append(field(QStringLiteral("host"),
-                              QStringLiteral("Hostname"),
-                              QStringLiteral("Host"),
-                              QJsonValue(),
-                              QString(),
-                              QString(),
-                              QString(),
-                              QJsonArray{QStringLiteral("Required")}));
-    factoryFields.append(field(QStringLiteral("tr064Port"),
-                              QStringLiteral("Integer"),
-                              QStringLiteral("TR-064 port"),
-                              static_cast<int>(kDefaultTr064Port)));
-    factoryFields.append(field(QStringLiteral("user"),
-                              QStringLiteral("String"),
-                              QStringLiteral("Username"),
-                              QJsonValue(),
-                              QString(),
-                              QString(),
-                              QString(),
-                              QJsonArray{QStringLiteral("Required")}));
-    factoryFields.append(field(QStringLiteral("password"),
-                              QStringLiteral("Password"),
-                              QStringLiteral("Password"),
-                              QJsonValue(),
-                              QString(),
-                              QString(),
-                              QString(),
-                              QJsonArray{QStringLiteral("Required"), QStringLiteral("Secret")}));
-    factoryFields.append(field(QStringLiteral("pollIntervalMs"),
-                              QStringLiteral("Integer"),
-                              QStringLiteral("Poll interval"),
-                              5000));
-    factoryFields.append(field(QStringLiteral("retryIntervalMs"),
-                              QStringLiteral("Integer"),
-                              QStringLiteral("Retry interval"),
-                              10000));
+Json buildFritzConfigSchemaObject()
+{
+    Json factoryFields = Json::array();
+    factoryFields.push_back(field({.key = "host", .type = "Hostname", .label = "Host",
+                                   .flags = Json::array({"Required"})}));
+    factoryFields.push_back(field({.key = "tr064Port", .type = "Integer",
+                                   .label = "TR-064 port",
+                                   .defaultValue = static_cast<int>(kDefaultTr064Port)}));
+    factoryFields.push_back(field({.key = "user", .type = "String", .label = "Username",
+                                   .flags = Json::array({"Required"})}));
+    factoryFields.push_back(field({.key = "password", .type = "Password", .label = "Password",
+                                   .flags = Json::array({"Required", "Secret"})}));
+    factoryFields.push_back(field({.key = "pollIntervalMs", .type = "Integer",
+                                   .label = "Poll interval", .defaultValue = 5000}));
+    factoryFields.push_back(field({.key = "retryIntervalMs", .type = "Integer",
+                                   .label = "Retry interval", .defaultValue = 10000}));
 
-    QJsonArray instanceFields;
-    instanceFields.append(field(QStringLiteral("trackedMacs"),
-                               QStringLiteral("Select"),
-                               QStringLiteral("Tracked devices"),
-                               QJsonArray(),
-                               QStringLiteral("browseHosts"),
-                               QStringLiteral("Probe WLAN"),
-                               QStringLiteral("settings"),
-                               QJsonArray{QStringLiteral("Multi"), QStringLiteral("InstanceOnly")},
-                               QJsonArray(),
-                               QJsonObject{
-                                   {QStringLiteral("labelPosition"), QStringLiteral("top")},
-                                   {QStringLiteral("actionPosition"), QStringLiteral("below")},
-                               }));
+    Json instanceFields = Json::array();
+    instanceFields.push_back(field({.key = "trackedMacs", .type = "Select",
+                                    .label = "Tracked devices",
+                                    .defaultValue = Json::array(),
+                                    .actionId = "browseHosts",
+                                    .actionLabel = "Probe WLAN",
+                                    .parentActionId = "settings",
+                                    .flags = Json::array({"Multi", "InstanceOnly"}),
+                                    .layout = Json{{"labelPosition", "top"},
+                                                   {"actionPosition", "below"}}}));
 
-    QJsonObject factorySection;
-    factorySection.insert(QStringLiteral("title"), QStringLiteral("FRITZ!Box"));
-    factorySection.insert(QStringLiteral("description"),
-                         QStringLiteral("Connect via TR-064 to track network clients."));
-    factorySection.insert(QStringLiteral("fields"), factoryFields);
+    Json factorySection = Json::object();
+    factorySection["title"] = "FRITZ!Box";
+    factorySection["description"] = "Connect via TR-064 to track network clients.";
+    factorySection["fields"] = factoryFields;
 
-    QJsonObject instanceSection;
-    instanceSection.insert(QStringLiteral("title"), QStringLiteral("FRITZ!Box"));
-    instanceSection.insert(QStringLiteral("description"),
-                          QStringLiteral("Connect via TR-064 to track network clients."));
-    instanceSection.insert(QStringLiteral("fields"), instanceFields);
+    Json instanceSection = Json::object();
+    instanceSection["title"] = "FRITZ!Box";
+    instanceSection["description"] = "Connect via TR-064 to track network clients.";
+    instanceSection["fields"] = instanceFields;
 
-    QJsonObject schema;
-    schema.insert(QStringLiteral("factory"), factorySection);
-    schema.insert(QStringLiteral("instance"), instanceSection);
+    Json schema = Json::object();
+    schema["factory"] = factorySection;
+    schema["instance"] = instanceSection;
     return schema;
 }
 
 } // namespace
 
-v1::AdapterConfigOptionList buildTrackedOptions(const QJsonObject &meta)
+v1::AdapterConfigOptionList buildTrackedOptions(const Json &meta)
 {
     v1::AdapterConfigOptionList options;
-    QSet<QString> seen;
+    std::set<std::string> seen;
 
-    const QJsonValue knownValue = meta.value(QStringLiteral("knownHosts"));
-    if (knownValue.isArray()) {
-        const QJsonArray arr = knownValue.toArray();
-        for (const QJsonValue &entry : arr) {
-            if (entry.isString()) {
-                const QString mac = normalizeMac(entry.toString());
-                if (mac.isEmpty() || seen.contains(mac))
-                    continue;
-                seen.insert(mac);
-                options.push_back({mac.toStdString(), mac.toStdString()});
+    const auto add = [&options, &seen](const std::string &mac, const std::string &label) {
+        if (mac.empty() || seen.count(mac))
+            return;
+        seen.insert(mac);
+        options.push_back({mac, label.empty() ? mac : label});
+    };
+
+    if (meta.is_object() && meta.contains("knownHosts") && meta.at("knownHosts").is_array()) {
+        for (const Json &entry : meta.at("knownHosts")) {
+            if (entry.is_string()) {
+                const std::string mac = normalizeMac(entry.get<std::string>());
+                add(mac, mac);
                 continue;
             }
-            if (!entry.isObject())
+            if (!entry.is_object())
                 continue;
-            const QJsonObject obj = entry.toObject();
-            const QString mac = normalizeMac(obj.value(QStringLiteral("mac")).toString());
-            if (mac.isEmpty() || seen.contains(mac))
-                continue;
-            seen.insert(mac);
-
-            const QString name = obj.value(QStringLiteral("name")).toString().trimmed();
-            const QString ip = obj.value(QStringLiteral("ip")).toString().trimmed();
-
-            QString label;
-            if (!ip.isEmpty() && !name.isEmpty()) {
-                label = QStringLiteral("%1 (%2)").arg(name, ip);
-            } else if (!ip.isEmpty()) {
+            const std::string mac = normalizeMac(jsonString(entry, "mac"));
+            const std::string name = str::trimmed(jsonString(entry, "name"));
+            const std::string ip = str::trimmed(jsonString(entry, "ip"));
+            std::string label;
+            if (!ip.empty() && !name.empty())
+                label = name + " (" + ip + ")";
+            else if (!ip.empty())
                 label = ip;
-            } else if (!name.isEmpty()) {
+            else if (!name.empty())
                 label = name;
-            } else {
-                label = mac;
-            }
-            options.push_back({mac.toStdString(), label.toStdString()});
+            add(mac, label);
         }
     }
 
-    const QSet<QString> trackedMacs = parseTrackedMacSelection(meta.value(QStringLiteral("trackedMacs")));
-    for (const QString &mac : trackedMacs) {
-        if (mac.isEmpty() || seen.contains(mac))
-            continue;
-        seen.insert(mac);
-        options.push_back({mac.toStdString(), mac.toStdString()});
+    // A tracked address the router no longer lists still has to be selectable,
+    // or the selection appears to have cleared itself.
+    if (meta.is_object() && meta.contains("trackedMacs")) {
+        const Json &tracked = meta.at("trackedMacs");
+        if (tracked.is_array()) {
+            for (const Json &entry : tracked) {
+                if (entry.is_string())
+                    add(normalizeMac(entry.get<std::string>()), {});
+                else if (entry.is_object())
+                    add(normalizeMac(jsonString(entry, "mac")), {});
+            }
+        } else if (tracked.is_string()) {
+            add(normalizeMac(tracked.get<std::string>()), {});
+        }
     }
 
     return options;
@@ -229,7 +209,7 @@ v1::AdapterCapabilities capabilities()
 
 v1::JsonText configSchemaJson()
 {
-    return toJson(buildFritzConfigSchemaObject());
+    return dump(buildFritzConfigSchemaObject());
 }
 
 } // namespace phicore::fritz::ipc

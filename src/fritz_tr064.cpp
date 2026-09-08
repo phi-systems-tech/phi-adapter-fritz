@@ -1,184 +1,131 @@
 #include "fritz_tr064.h"
 
-#include <QLatin1Char>
-#include <QLatin1String>
-#include <QStringList>
-#include <QXmlStreamReader>
+#include <algorithm>
+#include <cctype>
+
+#include "fritz_soap.h"
+#include "phi/runtime/str.h"
 
 namespace phicore::fritz::ipc {
 
-QString toSoapBoolean(bool enabled)
-{
-    return enabled ? QStringLiteral("1") : QStringLiteral("0");
-}
+namespace str = phi::str;
 
-bool isTruthy(const QString &value)
-{
-    const QString normalized = value.trimmed().toLower();
-    return normalized == QLatin1String("1") || normalized == QLatin1String("true");
-}
+namespace {
 
-quint16 parsePortValue(const QJsonValue &value)
+/// One `<Item>` block, read with the same tag scanner as everything else.
+HostEntry parseItem(std::string_view item)
 {
-    int parsed = 0;
-    bool ok = false;
-    if (value.isDouble()) {
-        parsed = value.toInt();
-        ok = true;
-    } else if (value.isString()) {
-        parsed = value.toString().trimmed().toInt(&ok);
+    HostEntry entry;
+    std::string value;
+    if (soapValue(item, "MACAddress", &value))
+        entry.mac = normalizeMac(value);
+    if (soapValue(item, "HostName", &value))
+        entry.name = str::trimmed(value);
+    if (soapValue(item, "IPAddress", &value))
+        entry.ip = str::trimmed(value);
+    if (soapValue(item, "Active", &value))
+        entry.active = isTruthy(value);
+    if (soapValue(item, "InterfaceType", &value))
+        entry.interfaceType = str::trimmed(value);
+    if (soapValue(item, "SignalStrength", &value)) {
+        bool ok = false;
+        const int signal = str::toInt(str::trimmed(value), &ok);
+        if (ok) {
+            entry.hasSignal = true;
+            entry.signalDbm = signal;
+        }
     }
-    if (!ok || parsed <= 0 || parsed > 65535)
+    return entry;
+}
+
+} // namespace
+
+std::string normalizeMac(std::string_view mac)
+{
+    return str::toLower(str::trimmed(mac));
+}
+
+bool isTruthy(std::string_view value)
+{
+    const std::string normalized = str::toLower(str::trimmed(value));
+    return normalized == "1" || normalized == "true";
+}
+
+std::string toSoapBoolean(bool enabled)
+{
+    return enabled ? "1" : "0";
+}
+
+std::uint16_t normalizedPort(int value)
+{
+    if (value <= 0 || value > 65535)
         return 0;
-    return static_cast<quint16>(parsed);
+    return static_cast<std::uint16_t>(value);
 }
 
-QString normalizeMac(const QString &mac)
-{
-    return mac.trimmed().toLower();
-}
-
-QByteArray buildSoapEnvelope(const QString &serviceType,
-                                    const QString &action,
-                                    const QMap<QString, QString> &params)
-{
-    QString body;
-    body += QStringLiteral("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
-    body += QStringLiteral("<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" ");
-    body += QStringLiteral("s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">");
-    body += QStringLiteral("<s:Body>");
-    body += QStringLiteral("<u:%1 xmlns:u=\"%2\">").arg(action, serviceType);
-    for (auto it = params.cbegin(); it != params.cend(); ++it)
-        body += QStringLiteral("<%1>%2</%1>").arg(it.key(), it.value());
-    body += QStringLiteral("</u:%1>").arg(action);
-    body += QStringLiteral("</s:Body>");
-    body += QStringLiteral("</s:Envelope>");
-    return body.toUtf8();
-}
-
-bool parseSoapValue(const QByteArray &payload, const QString &key, QString *value)
-{
-    if (!value)
-        return false;
-
-    QXmlStreamReader reader(payload);
-    while (!reader.atEnd()) {
-        reader.readNext();
-        if (reader.isStartElement() && reader.name() == key) {
-            *value = reader.readElementText().trimmed();
-            return true;
-        }
-    }
-    return false;
-}
-
-bool parseHostListPath(const QByteArray &payload, QString *path, QString *error)
-{
-    if (!path)
-        return false;
-
-    QXmlStreamReader reader(payload);
-    while (!reader.atEnd()) {
-        reader.readNext();
-        if (reader.isStartElement() && reader.name() == QLatin1String("NewHostListPath")) {
-            *path = reader.readElementText().trimmed();
-            return true;
-        }
-    }
-
-    if (error)
-        *error = reader.hasError() ? reader.errorString() : QStringLiteral("Host list path missing");
-    return false;
-}
-
-bool parseHostEntryFromSoap(const QByteArray &payload, HostEntry *entry)
+bool parseHostEntry(std::string_view payload, std::string_view mac, HostEntry *entry)
 {
     if (!entry)
         return false;
 
-    QXmlStreamReader reader(payload);
-    bool foundMac = false;
-    while (!reader.atEnd()) {
-        reader.readNext();
-        if (!reader.isStartElement())
-            continue;
+    HostEntry parsed;
+    parsed.mac = normalizeMac(mac);
 
-        const QStringView name = reader.name();
-        if (name == QLatin1String("NewMACAddress")) {
-            entry->mac = reader.readElementText().trimmed();
-            foundMac = true;
-        } else if (name == QLatin1String("NewHostName")) {
-            entry->name = reader.readElementText().trimmed();
-        } else if (name == QLatin1String("NewIPAddress")) {
-            entry->ip = reader.readElementText().trimmed();
-        } else if (name == QLatin1String("NewActive")) {
-            entry->active = isTruthy(reader.readElementText());
-        } else if (name == QLatin1String("NewInterfaceType")) {
-            entry->interfaceType = reader.readElementText().trimmed();
-        } else if (name == QLatin1String("NewSignalStrength")) {
-            const QString value = reader.readElementText().trimmed();
-            bool ok = false;
-            const int signal = value.toInt(&ok);
-            if (ok) {
-                entry->hasSignal = true;
-                entry->signalDbm = signal;
-            }
+    std::string value;
+    // A generic-entry answer carries the address; a specific-entry one does not,
+    // because it was the question.
+    if (soapValue(payload, "NewMACAddress", &value) && !str::trimmed(value).empty())
+        parsed.mac = normalizeMac(value);
+    if (parsed.mac.empty())
+        return false;
+
+    bool sawAnything = false;
+    if (soapValue(payload, "NewHostName", &value)) {
+        parsed.name = str::trimmed(value);
+        sawAnything = true;
+    }
+    if (soapValue(payload, "NewIPAddress", &value)) {
+        parsed.ip = str::trimmed(value);
+        sawAnything = true;
+    }
+    if (soapValue(payload, "NewActive", &value)) {
+        parsed.active = isTruthy(value);
+        sawAnything = true;
+    }
+    if (soapValue(payload, "NewInterfaceType", &value))
+        parsed.interfaceType = str::trimmed(value);
+    if (soapValue(payload, "NewSignalStrength", &value)) {
+        bool ok = false;
+        const int signal = str::toInt(str::trimmed(value), &ok);
+        if (ok) {
+            parsed.hasSignal = true;
+            parsed.signalDbm = signal;
         }
     }
-    return foundMac;
+    if (!sawAnything)
+        return false;
+
+    *entry = std::move(parsed);
+    return true;
 }
 
-QList<HostEntry> parseHostList(const QByteArray &payload)
+std::vector<HostEntry> parseHostList(std::string_view payload)
 {
-    QList<HostEntry> hosts;
-    QXmlStreamReader reader(payload);
-    HostEntry current;
-    bool inHost = false;
-
-    while (!reader.atEnd()) {
-        reader.readNext();
-        if (reader.isStartElement()) {
-            const QStringView name = reader.name();
-            if (name == QLatin1String("Item")) {
-                current = HostEntry();
-                inHost = true;
-            } else if (inHost) {
-                if (name == QLatin1String("MACAddress")) {
-                    current.mac = reader.readElementText().trimmed();
-                } else if (name == QLatin1String("HostName")) {
-                    current.name = reader.readElementText().trimmed();
-                } else if (name == QLatin1String("IPAddress")) {
-                    current.ip = reader.readElementText().trimmed();
-                } else if (name == QLatin1String("Active")) {
-                    current.active = isTruthy(reader.readElementText());
-                } else if (name == QLatin1String("SignalStrength")) {
-                    const QString value = reader.readElementText().trimmed();
-                    bool ok = false;
-                    const int signal = value.toInt(&ok);
-                    if (ok) {
-                        current.hasSignal = true;
-                        current.signalDbm = signal;
-                    }
-                } else if (name == QLatin1String("InterfaceType")) {
-                    current.interfaceType = reader.readElementText().trimmed();
-                }
-            }
-        } else if (reader.isEndElement() && reader.name() == QLatin1String("Item")) {
-            if (!current.mac.isEmpty()) {
-                current.mac = normalizeMac(current.mac);
-                hosts.push_back(current);
-            }
-            inHost = false;
-        }
+    std::vector<HostEntry> hosts;
+    std::size_t pos = 0;
+    for (;;) {
+        const std::size_t start = payload.find("<Item", pos);
+        if (start == std::string_view::npos)
+            break;
+        const std::size_t end = payload.find("</Item>", start);
+        if (end == std::string_view::npos)
+            break;
+        HostEntry entry = parseItem(payload.substr(start, end - start));
+        if (!entry.mac.empty())
+            hosts.push_back(std::move(entry));
+        pos = end + 7;
     }
-
     return hosts;
-}
-
-bool isInvalidActionFault(const QByteArray &payload)
-{
-    const QByteArray lower = payload.toLower();
-    return lower.contains("invalid action") || lower.contains("<errorcode>401</errorcode>");
 }
 
 } // namespace phicore::fritz::ipc

@@ -1,22 +1,22 @@
-// Process entry point for the FRITZ!Box sidecar: the adapter factory and the Qt
-// main loop that drives the SDK host. The router runtime lives in
-// fritz_sidecar, the TR-064 wire format in fritz_tr064.
+// Process entry point for the FRITZ!Box sidecar: the adapter factory and the
+// SDK's own main loop. The router runtime lives in fritz_instance, TR-064 in
+// fritz_tr064 and fritz_soap.
 
-#include <atomic>
-#include <csignal>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <optional>
+#include <string>
 
-#include <QCoreApplication>
-#include <QTimer>
-
-#include "phi/adapter/sdk/qt/instance_execution_backend_qt.h"
-#include "phi/adapter/sdk/qt/sidecar_driver_qt.h"
+#include "phi/adapter/sdk/loop_execution_backend.h"
 #include "phi/adapter/sdk/sidecar.h"
+#include "phi/runtime/loop.h"
 
+#include "fritz_instance.h"
+#include "fritz_json.h"
+#include "fritz_probe.h"
 #include "fritz_schema.h"
-#include "fritz_sidecar.h"
+#include "fritz_session.h"
 
 namespace v1 = phicore::adapter::v1;
 namespace sdk = phicore::adapter::sdk;
@@ -25,61 +25,31 @@ using namespace phicore::fritz::ipc;
 
 namespace {
 
-std::atomic_bool g_running{true};
-
-void handleSignal(int)
-{
-    g_running.store(false);
-}
-
 class FritzIpcFactory final : public sdk::AdapterFactory
 {
-public:
-    // TR-064 polling blocks in nested event loops; on the SDK's default
-    // (plain-thread) backend those instance callbacks had no Qt event loop of
-    // their own. A Qt backend gives every instance its own event loop, which is
-    // also what QNetworkAccessManager and the poll timer need.
+protected:
+    // The probe opens a connection and waits for a router, so it does not run
+    // on the host poll thread. It is a loop backend rather than a plain one
+    // because the HTTP client needs somewhere to watch a descriptor.
+    std::unique_ptr<sdk::InstanceExecutionBackend> createFactoryExecutionBackend() override
+    {
+        return sdk::createLoopExecutionBackend("fritz-factory");
+    }
+
     std::unique_ptr<sdk::InstanceExecutionBackend> createInstanceExecutionBackend(
         const sdk::ExternalId &externalId) override
     {
         (void)externalId;
-        return sdk::qt::createInstanceExecutionBackend();
+        return sdk::createLoopExecutionBackend("fritz-instance");
     }
 
-    v1::Utf8String pluginType() const override
-    {
-        return kPluginType;
-    }
-
-    v1::Utf8String displayName() const override
-    {
-        return phicore::fritz::ipc::displayName();
-    }
-
-    v1::Utf8String description() const override
-    {
-        return phicore::fritz::ipc::description();
-    }
-
-    v1::Utf8String apiVersion() const override
-    {
-        return v1::kProtocolLabel;
-    }
-
-    v1::Utf8String iconSvg() const override
-    {
-        return phicore::fritz::ipc::iconSvg();
-    }
-
-    int timeoutMs() const override
-    {
-        return 15000;
-    }
-
-    int maxInstances() const override
-    {
-        return 0;
-    }
+    v1::Utf8String pluginType() const override { return kPluginType; }
+    v1::Utf8String displayName() const override { return phicore::fritz::ipc::displayName(); }
+    v1::Utf8String description() const override { return phicore::fritz::ipc::description(); }
+    v1::Utf8String apiVersion() const override { return v1::kProtocolLabel; }
+    v1::Utf8String iconSvg() const override { return phicore::fritz::ipc::iconSvg(); }
+    int timeoutMs() const override { return 15000; }
+    int maxInstances() const override { return 0; }
 
     v1::AdapterCapabilities capabilities() const override
     {
@@ -96,51 +66,100 @@ public:
         (void)externalId;
         return makeInstance();
     }
+
+    /**
+     * @brief "Test connection", at the scope it is declared for.
+     *
+     * `capabilities()` has always put `probe` in `factoryActions` while the
+     * only handler lived in the instance and this hook was never overridden -
+     * so the SDK answered "Factory action handler not implemented" to the one
+     * button whose whole purpose is to be pressed before an instance exists.
+     */
+    void onFactoryActionInvoke(const sdk::AdapterActionInvokeRequest &request) override
+    {
+        if (request.actionId != "probe") {
+            answer(request.cmdId, v1::CmdStatus::NotSupported, "Factory action not supported");
+            return;
+        }
+
+        const ProbeTarget target = probeTargetFromParams(parseObject(request.paramsJson));
+        if (target.host.empty()) {
+            answer(request.cmdId, v1::CmdStatus::InvalidArgument, "Probe requires host or ip");
+            return;
+        }
+
+        // Created here rather than in the constructor: the constructor runs on
+        // the main thread and this object belongs to the factory backend's
+        // loop.
+        if (!m_session) {
+            phi::runtime::Loop *loop = phi::runtime::Loop::current();
+            if (loop == nullptr) {
+                answer(request.cmdId, v1::CmdStatus::Failure, "No loop on the factory thread");
+                return;
+            }
+            m_session.emplace(*loop);
+        }
+
+        std::cerr << "fritz-ipc probe endpoint=" << target.endpoint()
+                  << " userSet=" << (target.user.empty() ? "false" : "true") << '\n';
+
+        const v1::CmdId cmdId = request.cmdId;
+        const std::string endpoint = target.endpoint();
+        runProbe(*m_session, target, [this, cmdId, endpoint](ProbeOutcome outcome) {
+            if (!outcome.ok) {
+                answer(cmdId, v1::CmdStatus::Failure, outcome.error, "factory.action");
+                return;
+            }
+            v1::ActionResponse response;
+            response.id = cmdId;
+            response.tsMs = 0;
+            response.status = v1::CmdStatus::Success;
+            response.resultType = v1::ActionResultType::String;
+            response.resultValue = endpoint;
+            send(std::move(response));
+        });
+    }
+
+    /// The session belongs to the factory backend's loop, and this is the last
+    /// callback that still runs on it.
+    void onFactoryStopping() override { m_session.reset(); }
+
+private:
+    void answer(v1::CmdId cmdId, v1::CmdStatus status, const std::string &error,
+                const std::string &context = {})
+    {
+        v1::ActionResponse response;
+        response.id = cmdId;
+        response.status = status;
+        response.error = error;
+        response.errorContext = context;
+        response.resultType = v1::ActionResultType::None;
+        send(std::move(response));
+    }
+
+    void send(v1::ActionResponse response)
+    {
+        v1::Utf8String error;
+        if (!sendResult(response, &error))
+            std::cerr << "failed to send factory.action.invoke result: " << error << '\n';
+    }
+
+    std::optional<Tr064Session> m_session;
 };
 
 } // namespace
 
 int main(int argc, char **argv)
 {
-    QCoreApplication app(argc, argv);
-
-    std::signal(SIGINT, handleSignal);
-    std::signal(SIGTERM, handleSignal);
-
     const char *envSocketPath = std::getenv("PHI_ADAPTER_SOCKET_PATH");
     const v1::Utf8String socketPath = (argc > 1)
         ? argv[1]
         : (envSocketPath ? envSocketPath : v1::Utf8String("/tmp/phi-adapter-fritz-ipc.sock"));
 
-    std::cerr << "starting " << (argc > 0 && argv && argv[0] ? argv[0] : "phi_adapter_fritz")
-              << " for pluginType=" << kPluginType
+    std::cerr << "starting phi_adapter_fritz_ipc for pluginType=" << kPluginType
               << " socket=" << socketPath << '\n';
 
     FritzIpcFactory factory;
     sdk::SidecarHost host(socketPath, factory);
-
-    // The driver watches the host's poll descriptor from the Qt event loop:
-    // no polling interval, no idle wakeups, and the Qt event loop is no longer
-    // starved by a blocking poll (HTTP requests and timers run on time).
-    sdk::qt::SidecarDriver driver(host);
-
-    v1::Utf8String error;
-    if (!driver.start(&error)) {
-        std::cerr << "failed to start sidecar host: " << error << '\n';
-        return 1;
-    }
-
-    // Signal handlers only flip a flag; a slow timer turns it into a clean
-    // Qt shutdown.
-    QTimer shutdownTimer;
-    QObject::connect(&shutdownTimer, &QTimer::timeout, [&]() {
-        if (!g_running.load(std::memory_order_relaxed))
-            app.quit();
-    });
-    shutdownTimer.start(250);
-
-    const int execResult = app.exec();
-    driver.stop();
-    std::cerr << "stopping phi_adapter_fritz_ipc" << '\n';
-    return execResult;
+    return sdk::runSidecarMain(host);
 }
