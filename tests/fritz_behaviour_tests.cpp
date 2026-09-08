@@ -38,6 +38,17 @@ void testOnlyNewsIsReported()
     PHI_CHECK(!reported.descriptorIsNews("aa:bb", "phone|192.168.1.5"));
     PHI_CHECK(reported.descriptorIsNews("aa:bb", "phone|192.168.1.6"));
 
+    // A device announced with a channel it did not have before: phi-core
+    // rejects a value for a channel it does not know yet, and says so only in
+    // its own log - the send succeeded. Anything already recorded would never
+    // be sent again, so the values are forgotten while the descriptor is kept.
+    PHI_CHECK(!reported.isNews("aa:bb", "online", std::int64_t(1)));
+    reported.forgetValues("aa:bb");
+    PHI_CHECK_MSG(reported.isNews("aa:bb", "online", std::int64_t(1)),
+                  "a value dropped by core would never be sent again");
+    PHI_CHECK_MSG(!reported.descriptorIsNews("aa:bb", "phone|192.168.1.6"),
+                  "forgetting values re-announced the device, which would loop");
+
     // Forgetting one device leaves the others alone.
     reported.forgetDevice("aa:bb");
     PHI_CHECK(reported.isNews("aa:bb", "online", std::int64_t(1)));

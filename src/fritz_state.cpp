@@ -43,6 +43,11 @@ void ReportedValues::forget()
 void ReportedValues::forgetDevice(const std::string &deviceId)
 {
     m_descriptors.erase(deviceId);
+    forgetValues(deviceId);
+}
+
+void ReportedValues::forgetValues(const std::string &deviceId)
+{
     const std::string prefix = deviceId + "\x1f";
     for (auto it = m_values.begin(); it != m_values.end();) {
         if (it->first.rfind(prefix, 0) == 0)

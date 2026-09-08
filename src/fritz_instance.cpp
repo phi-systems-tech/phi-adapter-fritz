@@ -592,8 +592,14 @@ private:
                                buildRouterChannels(hasWlan24, hasWlan5, hasRates, hasUpdate),
                                &error)) {
             std::cerr << "failed to send deviceUpdated(router): " << error << '\n';
+            return;
         }
         m_routerAnnounced = true;
+        // The descriptor changed, so this may be the first time phi-core knows
+        // about one of these channels - and a value sent before it did was
+        // dropped as an unknown channel id, silently, because the send
+        // succeeded. Say everything again on the next poll.
+        m_reported.forgetValues(kRouterDeviceId);
     }
 
     void publishHost(const HostEntry &host)
@@ -602,8 +608,14 @@ private:
             return;
         if (m_reported.descriptorIsNews(host.mac, hostFingerprint(host))) {
             v1::Utf8String error;
-            if (!sendDeviceUpdated(buildHostDevice(host), buildHostChannels(host), &error))
+            if (!sendDeviceUpdated(buildHostDevice(host), buildHostChannels(host), &error)) {
                 std::cerr << "failed to send deviceUpdated(host): " << error << '\n';
+            } else {
+                // A host that just grew an RSSI channel is the same case as the
+                // router growing one: what was recorded as reported was never
+                // accepted.
+                m_reported.forgetValues(host.mac);
+            }
         }
         report(host.mac, kChannelOnline,
                static_cast<std::int64_t>(host.active ? v1::ConnectivityStatus::Connected

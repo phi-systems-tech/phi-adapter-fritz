@@ -37,6 +37,18 @@ public:
     void forget();
     void forgetDevice(const std::string &deviceId);
 
+    /**
+     * @brief Forgets the values of one device but not its descriptor.
+     *
+     * For the moment a device is announced with a channel it did not have
+     * before. phi-core rejects a state update for a channel it does not know
+     * yet - "Received invalid channel id" - and the adapter never hears about
+     * it, because the send itself succeeded. Anything already recorded as
+     * reported would then never be sent again. Forgetting the values, and only
+     * the values, makes the next poll say them all once more.
+     */
+    void forgetValues(const std::string &deviceId);
+
 private:
     std::map<std::string, phicore::adapter::v1::ScalarValue> m_values;
     std::map<std::string, std::string> m_descriptors;
