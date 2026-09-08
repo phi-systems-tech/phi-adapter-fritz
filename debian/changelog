@@ -1,7 +1,10 @@
-phi-adapter-fritz (0.0~git202609081307.462250f-1) trixie; urgency=medium
+phi-adapter-fritz (0.0~git202609081315.4a1658d-1) trixie; urgency=medium
 
-  * The software-update channel carries the status and both versions as a
-    composite value, with `status` as its projection.
+  * Channel values reported during a poll wait for that poll's descriptor. A
+    poll is where the instance learns what the router implements, so the
+    channel a value belongs to may not exist yet, or may still carry the type
+    it had before - and phi-core drops or misreads it without the adapter
+    hearing about it.
 
- -- Marius Schumacher <marius.schumacher@phisys.com>  Tue, 08 Sep 2026 13:07:23 +0200
+ -- Marius Schumacher <marius.schumacher@phisys.com>  Tue, 08 Sep 2026 13:15:31 +0200
 
