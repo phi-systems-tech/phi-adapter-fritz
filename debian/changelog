@@ -1,9 +1,7 @@
-phi-adapter-fritz (0.0~git202609081217.5344995-1) trixie; urgency=medium
+phi-adapter-fritz (0.0~git202609081307.462250f-1) trixie; urgency=medium
 
-  * A value sent for a channel phi-core did not know yet was dropped by core
-    and recorded here as reported, so it was never sent again - which is why
-    the restored update channel stayed empty. A device whose descriptor changed
-    forgets its recorded values and says them again.
+  * The software-update channel carries the status and both versions as a
+    composite value, with `status` as its projection.
 
- -- Marius Schumacher <marius.schumacher@phisys.com>  Tue, 08 Sep 2026 12:17:42 +0200
+ -- Marius Schumacher <marius.schumacher@phisys.com>  Tue, 08 Sep 2026 13:07:23 +0200
 
