@@ -101,6 +101,8 @@ protected:
         // not an end.
         m_lifecycle = Lifecycle::Paused;
         m_pollTimer.reset();
+        m_pollRunning = false;
+        m_pendingReports.clear();
         if (m_session)
             m_session->cancel();
         answerPending("Instance disconnected");
@@ -378,11 +380,27 @@ private:
         if (m_pollAnswered) {
             m_pollFailures = 0;
             setConnected(true);
+            // The descriptor first, then the values it describes. A poll is
+            // where this instance learns what the router implements, so the
+            // channel a value belongs to may not exist - or may still have the
+            // wrong type - until this call has been made. phi-core rejects a
+            // value for a channel it does not know, and applies the wrong
+            // semantics to one whose type it has not seen yet; neither reaches
+            // the adapter, because the send itself succeeded.
             announceRouter();
         } else {
             noteFailure();
         }
+        flushPendingReports();
         armPollTimer();
+    }
+
+    void flushPendingReports()
+    {
+        std::vector<std::function<void()>> pending;
+        pending.swap(m_pendingReports);
+        for (const auto &send : pending)
+            send();
     }
 
     void noteFailure()
@@ -659,10 +677,12 @@ private:
         }
         if (!m_reported.isNews(deviceId, channelId, fingerprint))
             return;
-        v1::Utf8String error;
-        if (!sendChannelObjectStateUpdated(deviceId, channelId, fields, nowMs(), &error))
-            std::cerr << "failed to send channelStateUpdated(" << channelId << "): " << error
-                      << '\n';
+        defer([this, deviceId, channelId, fields]() {
+            v1::Utf8String error;
+            if (!sendChannelObjectStateUpdated(deviceId, channelId, fields, nowMs(), &error))
+                std::cerr << "failed to send channelStateUpdated(" << channelId
+                          << "): " << error << '\n';
+        });
     }
 
     static std::string scalarToText(const v1::ScalarValue &value)
@@ -683,10 +703,22 @@ private:
     {
         if (!m_reported.isNews(deviceId, channelId, value))
             return;
-        v1::Utf8String error;
-        if (!sendChannelStateUpdated(deviceId, channelId, value, nowMs(), &error))
-            std::cerr << "failed to send channelStateUpdated(" << channelId << "): " << error
-                      << '\n';
+        defer([this, deviceId, channelId, value]() {
+            v1::Utf8String error;
+            if (!sendChannelStateUpdated(deviceId, channelId, value, nowMs(), &error))
+                std::cerr << "failed to send channelStateUpdated(" << channelId
+                          << "): " << error << '\n';
+        });
+    }
+
+    /// Runs now, or after this poll's descriptor if one is in flight.
+    void defer(std::function<void()> send)
+    {
+        if (!m_pollRunning) {
+            send();
+            return;
+        }
+        m_pendingReports.push_back(std::move(send));
     }
 
     void setConnected(bool connected)
@@ -1006,6 +1038,8 @@ private:
     RouterSnapshot m_snapshot;
 
     std::vector<std::function<void()>> m_steps;
+    /// Channel values waiting for the descriptor of the poll that produced them.
+    std::vector<std::function<void()>> m_pendingReports;
     std::size_t m_stepIndex = 0;
     bool m_pollRunning = false;
     bool m_pollAnswered = false;
