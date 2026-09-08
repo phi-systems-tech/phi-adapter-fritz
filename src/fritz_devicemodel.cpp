@@ -38,7 +38,9 @@ v1::ChannelList buildRouterChannels(bool hasWlan24, bool hasWlan5, bool hasRates
         update.externalId = kChannelSoftwareUpdate;
         update.name = "Software Update";
         update.kind = v1::ChannelKind::DeviceSoftwareUpdate;
-        update.dataType = v1::ChannelDataType::Enum;
+        // A status and two versions. Enum lost the versions, which are the
+        // part a person actually reads.
+        update.dataType = v1::ChannelDataType::Json;
         update.flags = v1::kChannelFlagDefaultRead;
         channels.push_back(std::move(update));
     }

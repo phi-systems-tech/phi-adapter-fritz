@@ -553,7 +553,7 @@ private:
             return;
         std::string status = isTruthy(value) ? "UpdateAvailable" : "UpToDate";
 
-        // The router also says what it is doing about it. Only the failure is
+        // The router also says what it is doing about it. Only a failure is
         // worth overriding "up to date" with; a download in progress is still
         // an update that is available.
         std::string state;
@@ -561,7 +561,24 @@ private:
             && str::containsIgnoreCase(state, "error")) {
             status = "UpdateFailed";
         }
-        report(kRouterDeviceId, kChannelSoftwareUpdate, status);
+
+        // The status is what a history row and an automation condition see -
+        // it is the field the kind names as this channel's projection. The two
+        // versions ride along for a person to read.
+        v1::ChannelValueFields fields;
+        fields.emplace_back("status", status);
+        std::string current;
+        if (soapValue(payload, "NewX_AVM-DE_CurrentFwVersion", &current)
+            || !m_routerFirmware.empty()) {
+            const std::string version = current.empty() ? m_routerFirmware : current;
+            if (!version.empty())
+                fields.emplace_back("currentVersion", version);
+        }
+        std::string target;
+        if (soapValue(payload, "NewX_AVM-DE_Version", &target) && !str::trimmed(target).empty())
+            fields.emplace_back("targetVersion", str::trimmed(target));
+
+        reportObject(kRouterDeviceId, kChannelSoftwareUpdate, fields);
     }
 
     // --- publishing -------------------------------------------------------
@@ -622,6 +639,43 @@ private:
                                                      : v1::ConnectivityStatus::Disconnected));
         if (host.hasSignal)
             report(host.mac, kChannelRssi, static_cast<double>(host.signalDbm));
+    }
+
+    /**
+     * @brief The same "only if it is news" rule for a composite value.
+     *
+     * Deduplicated on the whole object, not on the projection: a version that
+     * moved while the status stayed "UpToDate" is a change worth sending.
+     */
+    void reportObject(const std::string &deviceId, const std::string &channelId,
+                      const v1::ChannelValueFields &fields)
+    {
+        std::string fingerprint;
+        for (const auto &[name, value] : fields) {
+            fingerprint += name;
+            fingerprint += '=';
+            fingerprint += scalarToText(value);
+            fingerprint += ';';
+        }
+        if (!m_reported.isNews(deviceId, channelId, fingerprint))
+            return;
+        v1::Utf8String error;
+        if (!sendChannelObjectStateUpdated(deviceId, channelId, fields, nowMs(), &error))
+            std::cerr << "failed to send channelStateUpdated(" << channelId << "): " << error
+                      << '\n';
+    }
+
+    static std::string scalarToText(const v1::ScalarValue &value)
+    {
+        if (const auto *v = std::get_if<v1::Utf8String>(&value))
+            return *v;
+        if (const auto *v = std::get_if<std::int64_t>(&value))
+            return str::number(*v);
+        if (const auto *v = std::get_if<double>(&value))
+            return str::number(*v);
+        if (const auto *v = std::get_if<bool>(&value))
+            return *v ? "1" : "0";
+        return {};
     }
 
     void report(const std::string &deviceId, const std::string &channelId,

@@ -136,7 +136,14 @@ void testAChannelThisRouterCannotFillIsNotOffered()
     for (const v1::Channel &channel : full) {
         sawTx |= channel.externalId == kChannelTxRate;
         sawRx |= channel.externalId == kChannelRxRate;
-        sawUpdate |= channel.externalId == kChannelSoftwareUpdate;
+        if (channel.externalId == kChannelSoftwareUpdate) {
+            sawUpdate = true;
+            // A status and two versions: composite, so it is a Json channel and
+            // the kind names `status` as the field a history row and an
+            // automation condition see.
+            PHI_CHECK(channel.dataType == v1::ChannelDataType::Json);
+            PHI_CHECK(v1::channelProjectionField(channel.kind) == "status");
+        }
     }
     PHI_CHECK(sawTx && sawRx && sawUpdate);
 
