@@ -8,7 +8,7 @@
 // used to issue do not exist on it:
 //
 //   GetHostListPath              -> Invalid Action   (it is X_AVM-DE_GetHostListPath)
-//   X_AVM-DE_GetAutoUpdateInfo   -> Invalid Action
+//   X_AVM-DE_GetAutoUpdateInfo   -> Invalid Action   (the state is in UserInterface:1)
 //   GetAddonInfos                -> Invalid Action   (on either control path)
 //
 // The first meant every poll fell back to one SOAP call per host - 110 of them,
@@ -41,6 +41,16 @@ inline constexpr Service kWlan5{"urn:dslforum-org:service:WLANConfiguration:2",
 /// Invalid Action for everything.
 inline constexpr Service kWanCommon{"urn:dslforum-org:service:WANCommonInterfaceConfig:1",
                                     "/upnp/control/wancommonifconfig1"};
+/**
+ * @brief Where FRITZ!OS keeps the firmware update state.
+ *
+ * Not in DeviceInfo, whose GetInfo carries a version and no word about whether
+ * a newer one exists, and not in X_AVM-DE_GetAutoUpdateInfo, which this model
+ * does not have. `GetInfo` here answers with NewUpgradeAvailable,
+ * NewX_AVM-DE_UpdateState and NewX_AVM-DE_Version.
+ */
+inline constexpr Service kUserInterface{"urn:dslforum-org:service:UserInterface:1",
+                                        "/upnp/control/userif"};
 
 /// One entry of the router's host table.
 struct HostEntry {

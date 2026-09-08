@@ -22,6 +22,9 @@ enum class Feature {
     /// plain `GetHostListPath` the standard names.
     AvmHostListPath,
     StandardHostListPath,
+    /// `UserInterface:1 GetInfo`, which is where the update state lives.
+    UserInterfaceInfo,
+    /// `DeviceInfo X_AVM-DE_GetAutoUpdateInfo`, the older place for it.
     AutoUpdateInfo,
     /// `GetAddonInfos`, which carries a ready-made rate.
     AddonInfos,

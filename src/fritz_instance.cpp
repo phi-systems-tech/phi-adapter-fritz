@@ -343,8 +343,9 @@ private:
         if (slow) {
             m_steps.push_back([this]() { stepWlan(kWlan24, Feature::Wlan24, kChannelWlan24); });
             m_steps.push_back([this]() { stepWlan(kWlan5, Feature::Wlan5, kChannelWlan5); });
-            if (m_capabilities.worthTrying(Feature::AutoUpdateInfo))
-                m_steps.push_back([this]() { stepUpdateInfo(); });
+            if (m_capabilities.worthTrying(Feature::UserInterfaceInfo)
+                || m_capabilities.worthTrying(Feature::AutoUpdateInfo))
+                m_steps.push_back([this]() { stepUpdateState(); });
         }
 
         runStep();
@@ -489,30 +490,78 @@ private:
                                    }));
     }
 
-    void stepUpdateInfo()
+    /**
+     * @brief Whether a newer firmware is waiting.
+     *
+     * `UserInterface:1 GetInfo` is where FRITZ!OS keeps it, and it is asked
+     * first. `X_AVM-DE_GetAutoUpdateInfo` - the only place the adapter used to
+     * look - answers Invalid Action on the box in the field, which is why this
+     * channel had never carried anything but the "Unknown" placeholder.
+     */
+    void stepUpdateState()
     {
+        if (m_capabilities.worthTrying(Feature::UserInterfaceInfo)) {
+            stepIssued(m_session->call(kUserInterface, "GetInfo", {},
+                                       [this](Tr064Session::Reply reply) {
+                                           if (reply.ok) {
+                                               m_pollAnswered = true;
+                                               m_capabilities.markPresent(
+                                                   Feature::UserInterfaceInfo);
+                                               applyUpdateState(reply.payload, "NewUpgradeAvailable");
+                                               runStep();
+                                               return;
+                                           }
+                                           if (reply.invalidAction) {
+                                               m_capabilities.markAbsent(Feature::UserInterfaceInfo);
+                                               // Try the older place before
+                                               // giving up on the channel.
+                                               stepLegacyUpdateInfo();
+                                               return;
+                                           }
+                                           runStep();
+                                       }));
+            return;
+        }
+        stepLegacyUpdateInfo();
+    }
+
+    void stepLegacyUpdateInfo()
+    {
+        if (!m_capabilities.worthTrying(Feature::AutoUpdateInfo)) {
+            runStep();
+            return;
+        }
         stepIssued(m_session->call(kDeviceInfo, "X_AVM-DE_GetAutoUpdateInfo", {},
                                    [this](Tr064Session::Reply reply) {
                                        if (reply.ok) {
                                            m_pollAnswered = true;
                                            m_capabilities.markPresent(Feature::AutoUpdateInfo);
-                                           std::string value;
-                                           if (soapValue(reply.payload, "NewUpdateAvailable",
-                                                         &value)) {
-                                               report(kRouterDeviceId, kChannelSoftwareUpdate,
-                                                      std::string(isTruthy(value)
-                                                                      ? "UpdateAvailable"
-                                                                      : "UpToDate"));
-                                           }
+                                           applyUpdateState(reply.payload, "NewUpdateAvailable");
                                        } else if (reply.invalidAction) {
-                                           // This model has no such action. Asked
-                                           // once, and then never again - it used
-                                           // to be asked twelve times a minute
-                                           // for as long as the adapter ran.
+                                           // Neither place has it. Asked once
+                                           // each, and then never again.
                                            m_capabilities.markAbsent(Feature::AutoUpdateInfo);
                                        }
                                        runStep();
                                    }));
+    }
+
+    void applyUpdateState(const std::string &payload, const char *availableField)
+    {
+        std::string value;
+        if (!soapValue(payload, availableField, &value))
+            return;
+        std::string status = isTruthy(value) ? "UpdateAvailable" : "UpToDate";
+
+        // The router also says what it is doing about it. Only the failure is
+        // worth overriding "up to date" with; a download in progress is still
+        // an update that is available.
+        std::string state;
+        if (soapValue(payload, "NewX_AVM-DE_UpdateState", &state)
+            && str::containsIgnoreCase(state, "error")) {
+            status = "UpdateFailed";
+        }
+        report(kRouterDeviceId, kChannelSoftwareUpdate, status);
     }
 
     // --- publishing -------------------------------------------------------
@@ -527,8 +576,10 @@ private:
             m_capabilities.availability(Feature::ByteCounters)
             == RouterCapabilities::Availability::Present;
         const bool hasUpdate =
-            m_capabilities.availability(Feature::AutoUpdateInfo)
-            == RouterCapabilities::Availability::Present;
+            m_capabilities.availability(Feature::UserInterfaceInfo)
+                == RouterCapabilities::Availability::Present
+            || m_capabilities.availability(Feature::AutoUpdateInfo)
+                == RouterCapabilities::Availability::Present;
 
         const std::string fingerprint = routerFingerprint(m_routerName, m_routerFirmware,
                                                           hasWlan24, hasWlan5, hasRates,

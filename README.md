@@ -83,6 +83,16 @@ SOAP fault with error 401, `Invalid Action`. Measured against a FRITZ!Box
 | `WANCommonInterfaceConfig GetTotalBytesSent/Received` | works, on `/upnp/control/wancommonifconfig1` |
 | `WANCommonInterfaceConfig GetAddonInfos` | **Invalid Action**, on either path |
 | `DeviceInfo X_AVM-DE_GetAutoUpdateInfo` | **Invalid Action** |
+| `UserInterface:1 GetInfo` | works - this is where the update state is |
+
+The update state is a case worth naming. It is not in `DeviceInfo GetInfo`,
+whose answer carries a version and no word about whether a newer one exists,
+and not in `X_AVM-DE_GetAutoUpdateInfo`, which this model does not have - the
+only place the adapter used to look, which is why the channel had never carried
+anything but the "Unknown" placeholder. `UserInterface:1 GetInfo` at
+`/upnp/control/userif` answers with `NewUpgradeAvailable`,
+`NewX_AVM-DE_UpdateState` and `NewX_AVM-DE_Version`. Both places are tried, in
+that order.
 
 An action that comes back Invalid Action is recorded as absent and not issued
 again, and the channel it would have filled is not advertised. A channel that

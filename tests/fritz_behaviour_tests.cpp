@@ -90,6 +90,14 @@ void testWhatTheRouterTurnsOutToImplement()
     PHI_CHECK_MSG(!capabilities.worthTrying(Feature::AutoUpdateInfo),
                   "an action the router does not have is still being asked for");
 
+    // The update state has two possible homes, and the channel is offered when
+    // either answered. Looking in only one of them is how it came to say
+    // nothing but "Unknown" on a router that does publish it - just not there.
+    PHI_CHECK(capabilities.worthTrying(Feature::UserInterfaceInfo));
+    capabilities.markPresent(Feature::UserInterfaceInfo);
+    PHI_CHECK(capabilities.availability(Feature::UserInterfaceInfo)
+              == RouterCapabilities::Availability::Present);
+
     capabilities.markPresent(Feature::ByteCounters);
     PHI_CHECK(capabilities.worthTrying(Feature::ByteCounters));
     PHI_CHECK(capabilities.availability(Feature::ByteCounters)
