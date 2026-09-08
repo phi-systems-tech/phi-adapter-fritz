@@ -1,10 +1,9 @@
-phi-adapter-fritz (0.0~git202609081214.b86c792-1) trixie; urgency=medium
+phi-adapter-fritz (0.0~git202609081217.5344995-1) trixie; urgency=medium
 
-  * The software-update channel is back, and filled. The state is not in
-    DeviceInfo and not in X_AVM-DE_GetAutoUpdateInfo, which this model does not
-    have - it is in UserInterface:1 GetInfo at /upnp/control/userif, which
-    answers NewUpgradeAvailable and NewX_AVM-DE_UpdateState. Both places are
-    tried, the newer one first.
+  * A value sent for a channel phi-core did not know yet was dropped by core
+    and recorded here as reported, so it was never sent again - which is why
+    the restored update channel stayed empty. A device whose descriptor changed
+    forgets its recorded values and says them again.
 
- -- Marius Schumacher <marius.schumacher@phisys.com>  Tue, 08 Sep 2026 12:14:45 +0200
+ -- Marius Schumacher <marius.schumacher@phisys.com>  Tue, 08 Sep 2026 12:17:42 +0200
 
