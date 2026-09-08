@@ -1,14 +1,26 @@
-phi-adapter-fritz (0.0~git202608301458.0cd3c54-1) trixie; urgency=medium
+phi-adapter-fritz (0.0~git202609081156.67d8a88-1) trixie; urgency=medium
 
-  * A stop arriving inside a request no longer frees the reply the
-    request is waiting on.
+  * No Qt. The loop and the timers come from phi-runtime through the SDK, HTTP
+    with digest authentication from the SDK's client, JSON from nlohmann. The
+    nested event loop every request used to run inside is gone with it.
+  * Three of the six actions this adapter issued do not exist on the router in
+    the field, and it had no way of noticing. GetHostListPath is
+    X_AVM-DE_GetHostListPath here; its failure fell through to one SOAP call
+    per host - 110 of them, twelve times a minute, measured at 31 MB an hour.
+    The poll now asks GetSpecificHostEntry per tracked address instead, and the
+    full table only when browseHosts is pressed.
+  * GetAddonInfos and X_AVM-DE_GetAutoUpdateInfo are Invalid Action here, which
+    is why tx_rate and rx_rate had never carried a value. The rate is derived
+    from the byte counters, which this router does implement. An action that
+    says Invalid Action is not issued again, and a channel that cannot be
+    filled is not advertised.
+  * The poll is split by rate of change: uptime, tracked hosts and the counters
+    every interval; WLAN, firmware and update state once a minute.
+  * Values and device descriptors are only sent when they changed.
+  * "Test connection" works at factory scope, where it is declared. The factory
+    hook was never overridden, so the SDK answered "Factory action handler not
+    implemented" to it.
+  * SOAP parameters are XML-escaped.
 
- -- Marius Schumacher <google@phisys.com>  Sun, 30 Aug 2026 14:58:52 +0200
-
-phi-adapter-fritz (0.0~git202608241635.72706f6-1) trixie; urgency=medium
-
-  * The host list is read from the document the router serves, so one request
-    fetches every host instead of one request per host on every sync.
-
- -- Marius Schumacher <google@phisys.com>  Mon, 24 Aug 2026 16:35:51 +0200
+ -- Marius Schumacher <marius.schumacher@phisys.com>  Tue, 08 Sep 2026 11:56:37 +0200
 
