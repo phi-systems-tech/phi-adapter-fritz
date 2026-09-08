@@ -1,3 +1,10 @@
+phi-adapter-fritz (0.0~git202609081826.875bf6b-1) trixie; urgency=medium
+
+  * Rebuilt against phi-adapter-sdk 0.13.0, whose HttpClient::Call grew
+    TLS fields. No change of behaviour.
+
+ -- Marius Schumacher <marius.schumacher@phisys.com>  Tue, 08 Sep 2026 18:26:32 +0200
+
 phi-adapter-fritz (0.0~git202609081315.4a1658d-1) trixie; urgency=medium
 
   * Channel values reported during a poll wait for that poll's descriptor. A
