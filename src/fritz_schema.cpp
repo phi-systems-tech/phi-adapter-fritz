@@ -49,6 +49,7 @@ v1::AdapterConfigSchema buildFritzConfigSchema()
     v1::AdapterConfigField host = field("host", Type::Hostname, "Host");
     host.flags = Flag::Required;
     v1::AdapterConfigField port = field("tr064Port", Type::Integer, "TR-064 port", std::int64_t{kDefaultTr064Port});
+    port.flags = Flag::Required;
     port.layout.controlWidth = v1::AdapterConfigSize::Narrow;
     v1::AdapterConfigField user = field("user", Type::String, "Username");
     user.flags = Flag::Required;
