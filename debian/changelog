@@ -1,3 +1,9 @@
+phi-adapter-fritz (0.0~git202609151321.56de642-1) trixie; urgency=medium
+
+  * Schema and tracked-host choices through the SDK.
+
+ -- Marius Schumacher <marius.schumacher@phisys.com>  Tue, 15 Sep 2026 13:21:04 +0200
+
 phi-adapter-fritz (0.0~git202609081826.875bf6b-1) trixie; urgency=medium
 
   * Rebuilt against phi-adapter-sdk 0.13.0, whose HttpClient::Call grew
