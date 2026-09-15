@@ -1,3 +1,9 @@
+phi-adapter-fritz (0.0~git202609151615.fe5194e-1) trixie; urgency=medium
+
+  * No action kind (SDK 0.16)
+
+ -- Marius Schumacher <marius.schumacher@phisys.com>  Tue, 15 Sep 2026 16:15:49 +0200
+
 phi-adapter-fritz (0.0~git202609151540.b75eb1d-1) trixie; urgency=medium
 
   * TR-064 port field is now Required.
