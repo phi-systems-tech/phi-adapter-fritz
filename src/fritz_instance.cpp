@@ -932,20 +932,17 @@ private:
         answerAction(cmdId, v1::CmdStatus::Success, {}, formValues(), fieldChoices());
     }
 
-    std::string formValues() const
+    v1::AdapterFormValues formValues() const
     {
-        Json tracked = Json::array();
+        v1::ScalarList tracked;
         for (const std::string &mac : m_trackedMacs)
-            tracked.push_back(mac);
-        return dump(Json{{"trackedMacs", tracked}});
+            tracked.emplace_back(mac);
+        return {{"trackedMacs", tracked}};
     }
 
-    std::string fieldChoices() const
+    v1::AdapterFieldChoicesList fieldChoices() const
     {
-        Json choices = Json::array();
-        for (const v1::AdapterConfigOption &option : buildTrackedOptions(m_meta))
-            choices.push_back(Json{{"value", option.value}, {"label", option.label}});
-        return dump(Json{{"trackedMacs", choices}});
+        return {{"trackedMacs", buildTrackedOptions(m_meta)}};
     }
 
     // --- answering --------------------------------------------------------
@@ -974,8 +971,8 @@ private:
     }
 
     void answerAction(v1::CmdId cmdId, v1::CmdStatus status, const std::string &error,
-                      const std::string &formValuesJson = {},
-                      const std::string &fieldChoicesJson = {})
+                      v1::AdapterFormValues formValues = {},
+                      v1::AdapterFieldChoicesList fieldChoices = {})
     {
         v1::ActionResponse response;
         response.id = cmdId;
@@ -983,9 +980,9 @@ private:
         response.status = status;
         response.error = error;
         response.resultType = v1::ActionResultType::None;
-        if (!formValuesJson.empty()) {
-            response.formValuesJson = formValuesJson;
-            response.fieldChoicesJson = fieldChoicesJson;
+        if (!formValues.empty()) {
+            response.formValues = std::move(formValues);
+            response.fieldChoices = std::move(fieldChoices);
             response.reloadLayout = true;
         }
         v1::Utf8String sendError;

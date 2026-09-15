@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "phi/runtime/str.h"
@@ -22,83 +23,54 @@ constexpr const char kFritzIconSvg[] =
     "<text x=\"12\" y=\"15\" text-anchor=\"middle\" font-family=\"'Geist', 'Inter', 'Arial', sans-serif\" font-weight=\"700\" font-size=\"8.5\" fill=\"#D94A4A\">FRITZ!</text>"
     "</svg>";
 
-struct FieldSpec {
-    std::string key;
-    std::string type;
-    std::string label;
-    Json defaultValue = Json();
-    std::string actionId;
-    std::string actionLabel;
-    std::string parentActionId;
-    Json flags = Json::array();
-    Json choices = Json::array();
-    Json layout = Json::object();
-};
-
-Json field(const FieldSpec &spec)
+v1::AdapterConfigField field(const char *key, v1::AdapterConfigFieldType type, const char *label,
+                             v1::ScalarValue defaultValue = {})
 {
-    Json obj = Json::object();
-    obj["key"] = spec.key;
-    obj["type"] = spec.type;
-    obj["label"] = spec.label;
-    if (!spec.defaultValue.is_null())
-        obj["default"] = spec.defaultValue;
-    if (!spec.actionId.empty())
-        obj["actionId"] = spec.actionId;
-    if (!spec.actionLabel.empty())
-        obj["actionLabel"] = spec.actionLabel;
-    if (!spec.parentActionId.empty())
-        obj["parentActionId"] = spec.parentActionId;
-    if (!spec.flags.empty())
-        obj["flags"] = spec.flags;
-    if (!spec.choices.empty())
-        obj["choices"] = spec.choices;
-    if (!spec.layout.empty())
-        obj["layout"] = spec.layout;
-    return obj;
+    v1::AdapterConfigField out;
+    out.key = key;
+    out.type = type;
+    out.label = label;
+    out.defaultValue = std::move(defaultValue);
+    return out;
 }
 
-Json buildFritzConfigSchemaObject()
+v1::AdapterConfigSchema buildFritzConfigSchema()
 {
-    Json factoryFields = Json::array();
-    factoryFields.push_back(field({.key = "host", .type = "Hostname", .label = "Host",
-                                   .flags = Json::array({"Required"})}));
-    factoryFields.push_back(field({.key = "tr064Port", .type = "Integer",
-                                   .label = "TR-064 port",
-                                   .defaultValue = static_cast<int>(kDefaultTr064Port)}));
-    factoryFields.push_back(field({.key = "user", .type = "String", .label = "Username",
-                                   .flags = Json::array({"Required"})}));
-    factoryFields.push_back(field({.key = "password", .type = "Password", .label = "Password",
-                                   .flags = Json::array({"Required", "Secret"})}));
-    factoryFields.push_back(field({.key = "pollIntervalMs", .type = "Integer",
-                                   .label = "Poll interval", .defaultValue = 5000}));
-    factoryFields.push_back(field({.key = "retryIntervalMs", .type = "Integer",
-                                   .label = "Retry interval", .defaultValue = 10000}));
+    using Type = v1::AdapterConfigFieldType;
+    using Flag = v1::AdapterConfigFieldFlag;
+    v1::AdapterConfigSchema schema;
 
-    Json instanceFields = Json::array();
-    instanceFields.push_back(field({.key = "trackedMacs", .type = "Select",
-                                    .label = "Tracked devices",
-                                    .defaultValue = Json::array(),
-                                    .actionId = "browseHosts",
-                                    .actionLabel = "Probe WLAN",
-                                    .parentActionId = "settings",
-                                    .flags = Json::array({"Multi", "InstanceOnly"}),
-                                    .layout = Json{{"labelPosition", "top"},
-                                                   {"actionPosition", "below"}}}));
+    // Two columns: the address beside its port, the account beside its
+    // password, the two intervals short.
+    v1::AdapterConfigSection &factory = schema.factory;
+    factory.title = "FRITZ!Box";
+    factory.description = "Connect via TR-064 to track network clients.";
+    factory.layout.columns = 2;
+    v1::AdapterConfigField host = field("host", Type::Hostname, "Host");
+    host.flags = Flag::Required;
+    v1::AdapterConfigField port = field("tr064Port", Type::Integer, "TR-064 port", std::int64_t{kDefaultTr064Port});
+    port.layout.controlWidth = v1::AdapterConfigSize::Narrow;
+    v1::AdapterConfigField user = field("user", Type::String, "Username");
+    user.flags = Flag::Required;
+    v1::AdapterConfigField password = field("password", Type::Password, "Password");
+    password.flags = Flag::Required | Flag::Secret;
+    v1::AdapterConfigField poll = field("pollIntervalMs", Type::Integer, "Poll interval", std::int64_t{5000});
+    poll.layout.controlWidth = v1::AdapterConfigSize::Narrow;
+    v1::AdapterConfigField retry = field("retryIntervalMs", Type::Integer, "Retry interval", std::int64_t{10000});
+    retry.layout.controlWidth = v1::AdapterConfigSize::Narrow;
+    factory.fields = {host, port, user, password, poll, retry};
 
-    Json factorySection = Json::object();
-    factorySection["title"] = "FRITZ!Box";
-    factorySection["description"] = "Connect via TR-064 to track network clients.";
-    factorySection["fields"] = factoryFields;
-
-    Json instanceSection = Json::object();
-    instanceSection["title"] = "FRITZ!Box";
-    instanceSection["description"] = "Connect via TR-064 to track network clients.";
-    instanceSection["fields"] = instanceFields;
-
-    Json schema = Json::object();
-    schema["factory"] = factorySection;
-    schema["instance"] = instanceSection;
+    // One list that can grow long: above its full width, the probe below it.
+    v1::AdapterConfigSection &instance = schema.instance;
+    instance.title = "FRITZ!Box";
+    instance.description = "Connect via TR-064 to track network clients.";
+    v1::AdapterConfigField tracked = field("trackedMacs", Type::Select, "Tracked devices", {});
+    tracked.parentActionId = "settings";
+    tracked.flags = Flag::Multi | Flag::InstanceOnly;
+    tracked.actions = {{"browseHosts", "Probe WLAN"}};
+    tracked.layout.labelPosition = v1::AdapterConfigLabelPosition::Top;
+    tracked.layout.actionPosition = v1::AdapterConfigActionPosition::Below;
+    instance.fields = {tracked};
     return schema;
 }
 
@@ -207,9 +179,9 @@ v1::AdapterCapabilities capabilities()
     return caps;
 }
 
-v1::JsonText configSchemaJson()
+v1::AdapterConfigSchema configSchema()
 {
-    return dump(buildFritzConfigSchemaObject());
+    return buildFritzConfigSchema();
 }
 
 } // namespace phicore::fritz::ipc

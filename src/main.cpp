@@ -56,9 +56,9 @@ protected:
         return phicore::fritz::ipc::capabilities();
     }
 
-    v1::JsonText configSchemaJson() const override
+    std::optional<v1::AdapterConfigSchema> configSchema() const override
     {
-        return phicore::fritz::ipc::configSchemaJson();
+        return phicore::fritz::ipc::configSchema();
     }
 
     std::unique_ptr<sdk::AdapterInstance> createInstance(const sdk::ExternalId &externalId) override
