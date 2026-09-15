@@ -36,6 +36,8 @@ namespace {
 /// How many fast polls go by before the things that change by the month are
 /// asked for again: the WLAN switches, the firmware version, the update state.
 constexpr int kSlowPollEvery = 12;
+// What the last WLAN probe listed, in the instance's state directory.
+constexpr const char kKnownHostsFile[] = "known-hosts.json";
 
 /// Three failed polls before connectivity is called lost.
 constexpr int kFailuresBeforeDisconnected = 3;
@@ -747,25 +749,12 @@ private:
     void handleSettings(const sdk::AdapterActionInvokeRequest &request)
     {
         const Json params = parseObject(request.paramsJson);
-        Json patch = Json::object();
-        for (const auto &entry : params.items()) {
-            if (entry.key() == "trackedMacs") {
-                Json macs = Json::array();
-                for (const std::string &mac : macList(entry.value()))
-                    macs.push_back(mac);
-                patch["trackedMacs"] = macs;
-                continue;
-            }
-            patch[entry.key()] = entry.value();
-        }
-
-        if (!patch.empty()) {
-            for (const auto &entry : patch.items())
-                m_meta[entry.key()] = entry.value();
+        if (params.contains("trackedMacs")) {
+            m_meta["trackedMacs"] = macList(params.at("trackedMacs"));
             m_info.metaJson = dump(m_meta);
             applyConfig();
             v1::Utf8String error;
-            if (!sendAdapterMetaUpdated(dump(patch), &error))
+            if (!sendAdapterMetaUpdated({{"trackedMacs", trackedList()}}, &error))
                 std::cerr << "failed to send adapterMetaUpdated(settings): " << error << '\n';
         }
 
@@ -877,8 +866,9 @@ private:
     void completeBrowse(v1::CmdId cmdId, const std::vector<HostEntry> &hosts)
     {
         std::map<std::string, Json> known;
-        if (m_meta.contains("knownHosts") && m_meta.at("knownHosts").is_array()) {
-            for (const Json &entry : m_meta.at("knownHosts")) {
+        const Json stored = knownHosts();
+        if (stored.is_array()) {
+            for (const Json &entry : stored) {
                 if (!entry.is_object())
                     continue;
                 const std::string mac = normalizeMac(jsonString(entry, "mac"));
@@ -907,24 +897,14 @@ private:
             known[mac] = entry;
         }
 
-        Json knownHosts = Json::array();
+        // The hosts are the adapter's own record of what the router listed:
+        // kept in its state directory, not in the meta every client receives.
+        Json hostList = Json::array();
         for (const auto &[mac, entry] : known)
-            knownHosts.push_back(entry);
-
-        Json patch = Json::object();
-        patch["knownHosts"] = knownHosts;
-        Json tracked = Json::array();
-        for (const std::string &mac : m_trackedMacs)
-            tracked.push_back(mac);
-        patch["trackedMacs"] = tracked;
-
-        for (const auto &entry : patch.items())
-            m_meta[entry.key()] = entry.value();
-        m_info.metaJson = dump(m_meta);
-
+            hostList.push_back(entry);
         v1::Utf8String error;
-        if (!sendAdapterMetaUpdated(dump(patch), &error))
-            std::cerr << "failed to send adapterMetaUpdated(browseHosts): " << error << '\n';
+        if (!writeStateFile(kKnownHostsFile, dump(Json{{"hosts", hostList}}), &error))
+            std::cerr << "fritz-ipc browseHosts: " << error << '\n';
 
         std::cerr << "fritz-ipc browseHosts hosts=" << hosts.size()
                   << " known=" << known.size() << " tracked=" << m_trackedMacs.size() << '\n';
@@ -932,17 +912,25 @@ private:
         answerAction(cmdId, v1::CmdStatus::Success, {}, formValues(), fieldChoices());
     }
 
-    v1::AdapterFormValues formValues() const
+    v1::ScalarList trackedList() const
     {
         v1::ScalarList tracked;
         for (const std::string &mac : m_trackedMacs)
             tracked.emplace_back(mac);
-        return {{"trackedMacs", tracked}};
+        return tracked;
+    }
+
+    v1::AdapterFormValues formValues() const { return {{"trackedMacs", trackedList()}}; }
+
+    Json knownHosts() const
+    {
+        const Json stored = parseObject(readStateFile(kKnownHostsFile).value_or(std::string()));
+        return stored.contains("hosts") ? stored.at("hosts") : Json::array();
     }
 
     v1::AdapterFieldChoicesList fieldChoices() const
     {
-        return {{"trackedMacs", buildTrackedOptions(m_meta)}};
+        return {{"trackedMacs", buildTrackedOptions(knownHosts(), m_trackedMacs)}};
     }
 
     // --- answering --------------------------------------------------------

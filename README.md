@@ -142,7 +142,8 @@ running poll rather than queueing behind it. The next poll is five seconds away.
 - Factory scope: `host`, `tr064Port`, `user`, `password`, `pollIntervalMs`,
   `retryIntervalMs`
 - Instance scope: `trackedMacs`, filled by the `browseHosts` action
-- `knownHosts` is the picker's memory, written by `browseHosts`
+- the hosts the picker offers are what `browseHosts` last listed, kept in the
+  instance's state directory (`known-hosts.json`), not in the adapter meta
 
 ### Known Rough Edges
 

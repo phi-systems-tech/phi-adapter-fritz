@@ -224,16 +224,14 @@ void testWhereTheProbeGetsItsValues()
 
 void testThePickerNeverLosesASelection()
 {
-    const Json meta = parseObject(R"({
-        "knownHosts": [
+    const Json knownHosts = parseObject(R"({"hosts": [
             {"mac": "AA:BB:CC:DD:EE:FF", "name": "phone", "ip": "192.168.1.5"},
             {"mac": "11:22:33:44:55:66", "ip": "192.168.1.6"},
             {"mac": "77:88:99:AA:BB:CC"}
-        ],
-        "trackedMacs": ["aa:bb:cc:dd:ee:ff", "de:ad:be:ef:00:01"]
-    })");
+        ]})").at("hosts");
+    const std::vector<std::string> tracked = {"aa:bb:cc:dd:ee:ff", "de:ad:be:ef:00:01"};
 
-    const v1::AdapterConfigOptionList options = buildTrackedOptions(meta);
+    const v1::AdapterConfigOptionList options = buildTrackedOptions(knownHosts, tracked);
     PHI_CHECK_MSG(options.size() == 4, "%d options, expected 4", int(options.size()));
     if (options.size() != 4)
         return;
@@ -246,7 +244,7 @@ void testThePickerNeverLosesASelection()
     PHI_CHECK_MSG(options[3].value == "de:ad:be:ef:00:01",
                   "a tracked address dropped out of the picker");
 
-    PHI_CHECK(buildTrackedOptions(parseObject("{}")).empty());
+    PHI_CHECK(buildTrackedOptions(Json::array(), {}).empty());
 }
 
 } // namespace

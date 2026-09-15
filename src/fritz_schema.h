@@ -4,6 +4,7 @@
 // nothing here talks to a router.
 
 #include <string>
+#include <vector>
 
 #include "phi/adapter/sdk/sidecar.h"
 
@@ -23,10 +24,11 @@ phicore::adapter::v1::AdapterConfigSchema configSchema();
 /**
  * @brief Selectable hosts for the "tracked devices" field.
  *
- * Built from the instance meta's `knownHosts`, with any `trackedMacs` that are
- * no longer in the host list appended, so a selection never silently vanishes
- * when a device drops off the router.
+ * The hosts the last WLAN probe listed, with every tracked address that is no
+ * longer among them appended, so a selection never silently vanishes when a
+ * device drops off the router.
  */
-phicore::adapter::v1::AdapterConfigOptionList buildTrackedOptions(const Json &meta);
+phicore::adapter::v1::AdapterConfigOptionList buildTrackedOptions(const Json &knownHosts,
+                                                                  const std::vector<std::string> &trackedMacs);
 
 } // namespace phicore::fritz::ipc

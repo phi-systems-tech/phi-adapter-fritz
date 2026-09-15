@@ -76,7 +76,7 @@ v1::AdapterConfigSchema buildFritzConfigSchema()
 
 } // namespace
 
-v1::AdapterConfigOptionList buildTrackedOptions(const Json &meta)
+v1::AdapterConfigOptionList buildTrackedOptions(const Json &knownHosts, const std::vector<std::string> &trackedMacs)
 {
     v1::AdapterConfigOptionList options;
     std::set<std::string> seen;
@@ -88,8 +88,8 @@ v1::AdapterConfigOptionList buildTrackedOptions(const Json &meta)
         options.push_back({mac, label.empty() ? mac : label});
     };
 
-    if (meta.is_object() && meta.contains("knownHosts") && meta.at("knownHosts").is_array()) {
-        for (const Json &entry : meta.at("knownHosts")) {
+    if (knownHosts.is_array()) {
+        for (const Json &entry : knownHosts) {
             if (entry.is_string()) {
                 const std::string mac = normalizeMac(entry.get<std::string>());
                 add(mac, mac);
@@ -113,19 +113,8 @@ v1::AdapterConfigOptionList buildTrackedOptions(const Json &meta)
 
     // A tracked address the router no longer lists still has to be selectable,
     // or the selection appears to have cleared itself.
-    if (meta.is_object() && meta.contains("trackedMacs")) {
-        const Json &tracked = meta.at("trackedMacs");
-        if (tracked.is_array()) {
-            for (const Json &entry : tracked) {
-                if (entry.is_string())
-                    add(normalizeMac(entry.get<std::string>()), {});
-                else if (entry.is_object())
-                    add(normalizeMac(jsonString(entry, "mac")), {});
-            }
-        } else if (tracked.is_string()) {
-            add(normalizeMac(tracked.get<std::string>()), {});
-        }
-    }
+    for (const std::string &mac : trackedMacs)
+        add(normalizeMac(mac), {});
 
     return options;
 }
@@ -152,13 +141,12 @@ v1::AdapterCapabilities capabilities()
     caps.flags = v1::AdapterFlag::SupportsDiscovery
         | v1::AdapterFlag::SupportsProbe
         | v1::AdapterFlag::RequiresPolling;
-    caps.defaultsJson = R"({"tr064Port":49000,"pollIntervalMs":5000,"retryIntervalMs":10000})";
 
     v1::AdapterActionDescriptor browse;
     browse.id = "browseHosts";
     browse.label = "Probe WLAN";
     browse.description = "Fetch current WLAN/LAN clients";
-    browse.metaJson = R"({"placement":"form_field","kind":"command","requiresAck":true})";
+    browse.placement = v1::AdapterActionPlacement::Field;
     caps.instanceActions.push_back(browse);
 
     v1::AdapterActionDescriptor settings;
@@ -166,14 +154,14 @@ v1::AdapterCapabilities capabilities()
     settings.label = "Settings";
     settings.description = "Edit tracked devices.";
     settings.hasForm = true;
-    settings.metaJson = R"({"placement":"card","kind":"open_dialog","requiresAck":true})";
+    settings.kind = v1::AdapterActionKind::OpenDialog;
+    settings.loadFormOnOpen = true;
     caps.instanceActions.push_back(settings);
 
     v1::AdapterActionDescriptor probe;
     probe.id = "probe";
     probe.label = "Test connection";
     probe.description = "Reachability and credentials check";
-    probe.metaJson = R"({"placement":"card","kind":"command","requiresAck":true})";
     caps.factoryActions.push_back(probe);
 
     return caps;
