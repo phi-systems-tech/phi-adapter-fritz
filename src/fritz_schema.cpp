@@ -155,7 +155,6 @@ v1::AdapterCapabilities capabilities()
     settings.label = "Settings";
     settings.description = "Edit tracked devices.";
     settings.hasForm = true;
-    settings.kind = v1::AdapterActionKind::OpenDialog;
     settings.loadFormOnOpen = true;
     caps.instanceActions.push_back(settings);
 
