@@ -1,3 +1,9 @@
+phi-adapter-fritz (0.0~git202609151500.7f61361-1) trixie; urgency=medium
+
+  * Typed actions; the hosts a probe listed live in the state directory
+
+ -- Marius Schumacher <marius.schumacher@phisys.com>  Tue, 15 Sep 2026 15:00:53 +0200
+
 phi-adapter-fritz (0.0~git202609151321.56de642-1) trixie; urgency=medium
 
   * Schema and tracked-host choices through the SDK.
