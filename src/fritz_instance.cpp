@@ -10,6 +10,8 @@
 #include <utility>
 #include <vector>
 
+#include "phi/adapter/sdk/reachability.h"
+
 #include "phi/runtime/loop.h"
 #include "phi/runtime/oneshots.h"
 #include "phi/runtime/str.h"
@@ -40,7 +42,6 @@ constexpr int kSlowPollEvery = 12;
 constexpr const char kKnownHostsFile[] = "known-hosts.json";
 
 /// Three failed polls before connectivity is called lost.
-constexpr int kFailuresBeforeDisconnected = 3;
 
 std::int64_t nowMs()
 {
@@ -111,7 +112,7 @@ protected:
         m_reported.forget();
         m_txMeter.forget();
         m_rxMeter.forget();
-        m_pollFailures = 0;
+        m_router.forget();
         setConnected(false);
     }
 
@@ -136,7 +137,7 @@ protected:
             m_routerAnnounced = false;
             setConnected(false);
         }
-        m_pollFailures = 0;
+        m_router.forget();
         m_pollsSinceSlow = kSlowPollEvery;   // the first poll asks for everything
 
         std::cerr << "fritz-ipc config.changed adapterId=" << request.adapterId
@@ -242,6 +243,8 @@ private:
     {
         m_pollIntervalMs = std::clamp(jsonInt(m_meta, "pollIntervalMs", 5000), 1000, 300000);
         m_retryIntervalMs = std::clamp(jsonInt(m_meta, "retryIntervalMs", 10000), 1000, 300000);
+        m_router = sdk::Reachability(routerPolicy());
+        m_nextPollMs = m_pollIntervalMs;
         const std::uint16_t configured = normalizedPort(jsonInt(m_meta, "tr064Port", 0));
         const std::uint16_t discovered = normalizedPort(static_cast<int>(m_info.port));
         m_port = configured > 0 ? configured
@@ -283,7 +286,7 @@ private:
     {
         if (!m_loop || m_lifecycle != Lifecycle::Running)
             return;
-        const int interval = m_connected ? m_pollIntervalMs : m_retryIntervalMs;
+        const int interval = static_cast<int>(m_nextPollMs > 0 ? m_nextPollMs : m_pollIntervalMs);
         if (m_pollTimer && interval == m_pollTimerInterval)
             return;
         m_pollTimerInterval = interval;
@@ -303,6 +306,20 @@ private:
         m_loop = nullptr;
     }
 
+    /// Three missed polls before the router counts as gone, and then ever
+    /// longer between attempts. A router that is off, or behind a switch
+    /// somebody unplugged, answers no sooner for being asked twelve times a
+    /// minute.
+    [[nodiscard]] sdk::Reachability::Policy routerPolicy() const
+    {
+        const auto retry = static_cast<std::int64_t>(m_retryIntervalMs);
+        sdk::Reachability::Policy policy;
+        policy.intervalMs = m_pollIntervalMs;
+        policy.strikes = 3;
+        policy.retryDelaysMs = {retry, 2 * retry, 3 * retry, 6 * retry};
+        return policy;
+    }
+
     // --- the poll ---------------------------------------------------------
 
     void beginPoll()
@@ -312,8 +329,7 @@ private:
         if (m_pollRunning || m_session->busy())
             return;
         if (!m_session->addressable()) {
-            logPollError("Host/IP is required");
-            noteFailure();
+            noteFailure("Host/IP is required");
             return;
         }
 
@@ -325,6 +341,7 @@ private:
         m_stepIndex = 0;
         m_pollRunning = true;
         m_pollAnswered = false;
+        m_pollError.clear();
         m_snapshot = RouterSnapshot{};
 
         // Reachability, uptime, and - once a minute - the firmware version.
@@ -380,7 +397,17 @@ private:
     {
         m_pollRunning = false;
         if (m_pollAnswered) {
-            m_pollFailures = 0;
+            const sdk::Reachability::Verdict verdict = m_router.answered(nowMs());
+            m_nextPollMs = verdict.waitMs;
+            // A router that came back said nothing about it before.
+            if (verdict.say)
+                std::cerr << "fritz-ipc answering again\n";
+            // A service that did not answer while the others did is not a
+            // router that has gone away: said once per reason, not every poll.
+            if (!m_pollError.empty() && m_pollError != m_saidStepError) {
+                m_saidStepError = m_pollError;
+                std::cerr << "fritz-ipc step failed: " << m_pollError << '\n';
+            }
             setConnected(true);
             // The descriptor first, then the values it describes. A poll is
             // where this instance learns what the router implements, so the
@@ -391,7 +418,7 @@ private:
             // the adapter, because the send itself succeeded.
             announceRouter();
         } else {
-            noteFailure();
+            noteFailure(m_pollError);
         }
         flushPendingReports();
         armPollTimer();
@@ -405,12 +432,15 @@ private:
             send();
     }
 
-    void noteFailure()
+    void noteFailure(const std::string &error)
     {
         m_pollRunning = false;
-        if (m_pollFailures < kFailuresBeforeDisconnected)
-            ++m_pollFailures;
-        if (m_pollFailures >= kFailuresBeforeDisconnected)
+        const sdk::Reachability::Verdict verdict =
+            m_router.missed(error.empty() ? "no answer" : error, nowMs());
+        m_nextPollMs = verdict.waitMs;
+        if (verdict.say)
+            std::cerr << "fritz-ipc poll failed: " << m_router.reason() << '\n';
+        if (verdict.changed)
             setConnected(false);
         armPollTimer();
     }
@@ -734,14 +764,12 @@ private:
             std::cerr << "failed to send connectionStateChanged: " << error << '\n';
     }
 
+    /// What a step could not do, kept for the end of the poll: the reason the
+    /// router is reported gone, if nothing else answered either.
     void logPollError(const std::string &error)
     {
-        const std::int64_t now = nowMs();
-        if (error == m_lastPollError && (now - m_lastPollErrorMs) < m_retryIntervalMs)
-            return;
-        m_lastPollError = error;
-        m_lastPollErrorMs = now;
-        std::cerr << "fritz-ipc poll failed: " << error << '\n';
+        if (!error.empty())
+            m_pollError = error;
     }
 
     // --- the actions ------------------------------------------------------
@@ -1029,15 +1057,18 @@ private:
     bool m_pollRunning = false;
     bool m_pollAnswered = false;
     int m_pollsSinceSlow = 0;
-    int m_pollFailures = 0;
+    sdk::Reachability m_router;
+    /// What the gate said to wait before the next poll.
+    std::int64_t m_nextPollMs = 0;
 
     Lifecycle m_lifecycle = Lifecycle::Idle;
     bool m_connected = false;
     bool m_routerAnnounced = false;
     std::string m_routerName;
     std::string m_routerFirmware;
-    std::string m_lastPollError;
-    std::int64_t m_lastPollErrorMs = 0;
+    /// The last step failure of the running poll, and the one already said.
+    std::string m_pollError;
+    std::string m_saidStepError;
 };
 
 } // namespace

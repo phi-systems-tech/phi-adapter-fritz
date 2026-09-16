@@ -106,9 +106,15 @@ One execution thread per instance, one event loop on it, one TR-064 call in
 flight at a time. Nothing blocks the loop, so no callback runs inside another.
 
 - `Idle` — started, but no configuration yet, so no endpoint to poll.
-- `Running + Disconnected` — the poll timer uses `retryIntervalMs`. Three polls
-  in a row that nothing answered turn connectivity off.
-- `Running + Connected` — the poll timer uses `pollIntervalMs`.
+- `Running + Disconnected` — three polls in a row that nothing answered turn
+  connectivity off. The poll then backs off: `retryIntervalMs`, twice, three
+  times, six times it, and there it stays; a router that is off answers no
+  sooner for being asked twelve times a minute. One line says it is gone, one
+  says it answers again. The counting and that rule are `sdk::Reachability`
+  (phi-adapter-sdk README, "A Device That Stops Answering").
+- `Running + Connected` — the poll timer uses `pollIntervalMs`, and any answer
+  resets the strikes and the wait. A single service that did not answer while
+  the others did is said once per reason, not once per poll.
 - `Paused` — phi-core disconnected. It comes back with the configuration, which
   starts the instance again.
 - `Stopped` — terminal, and where everything belonging to the loop is released:
