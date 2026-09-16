@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <chrono>
 #include <functional>
-#include <iostream>
 #include <map>
 #include <optional>
 #include <string>
@@ -78,7 +77,8 @@ protected:
     {
         m_loop = phi::runtime::Loop::current();
         if (m_loop == nullptr) {
-            std::cerr << "fritz instance started off a loop; no timers are possible\n";
+            log(sdk::LogLevel::Error, sdk::LogCategory::Lifecycle,
+                "started off a loop; no timers are possible");
             return false;
         }
         m_session.emplace(*m_loop);
@@ -140,9 +140,10 @@ protected:
         m_router.forget();
         m_pollsSinceSlow = kSlowPollEvery;   // the first poll asks for everything
 
-        std::cerr << "fritz-ipc config.changed adapterId=" << request.adapterId
-                  << " externalId=" << m_info.externalId
-                  << " tracked=" << m_trackedMacs.size() << '\n';
+        log(sdk::LogLevel::Debug, sdk::LogCategory::Config,
+            "config.changed adapterId=%1 externalId=%2 tracked=%3",
+            {static_cast<std::int64_t>(request.adapterId), m_info.externalId,
+             static_cast<std::int64_t>(m_trackedMacs.size())});
 
         armPollTimer();
         beginPoll();
@@ -401,12 +402,14 @@ private:
             m_nextPollMs = verdict.waitMs;
             // A router that came back said nothing about it before.
             if (verdict.say)
-                std::cerr << "fritz-ipc answering again\n";
+                log(sdk::LogLevel::Info, sdk::LogCategory::Network, "the router is answering again");
             // A service that did not answer while the others did is not a
             // router that has gone away: said once per reason, not every poll.
             if (!m_pollError.empty() && m_pollError != m_saidStepError) {
                 m_saidStepError = m_pollError;
-                std::cerr << "fritz-ipc step failed: " << m_pollError << '\n';
+                log(sdk::LogLevel::Warn, sdk::LogCategory::Network,
+                    "one service did not answer while the others did: %1",
+                    {v1::Utf8String(m_pollError)});
             }
             setConnected(true);
             // The descriptor first, then the values it describes. A poll is
@@ -439,7 +442,9 @@ private:
             m_router.missed(error.empty() ? "no answer" : error, nowMs());
         m_nextPollMs = verdict.waitMs;
         if (verdict.say)
-            std::cerr << "fritz-ipc poll failed: " << m_router.reason() << '\n';
+            log(verdict.changed ? sdk::LogLevel::Error : sdk::LogLevel::Warn,
+                sdk::LogCategory::Network, "the router did not answer: %1",
+                {v1::Utf8String(m_router.reason())});
         if (verdict.changed)
             setConnected(false);
         armPollTimer();
@@ -658,7 +663,8 @@ private:
         if (!sendDeviceUpdated(buildRouterDevice(m_routerName, m_routerFirmware),
                                buildRouterChannels(hasWlan24, hasWlan5, hasRates, hasUpdate),
                                &error)) {
-            std::cerr << "failed to send deviceUpdated(router): " << error << '\n';
+            log(sdk::LogLevel::Error, sdk::LogCategory::Internal,
+                "failed to send deviceUpdated(router): %1", {error});
             return;
         }
         m_routerAnnounced = true;
@@ -676,7 +682,8 @@ private:
         if (m_reported.descriptorIsNews(host.mac, hostFingerprint(host))) {
             v1::Utf8String error;
             if (!sendDeviceUpdated(buildHostDevice(host), buildHostChannels(host), &error)) {
-                std::cerr << "failed to send deviceUpdated(host): " << error << '\n';
+                log(sdk::LogLevel::Error, sdk::LogCategory::Internal,
+                    "failed to send deviceUpdated(host): %1", {error});
             } else {
                 // A host that just grew an RSSI channel is the same case as the
                 // router growing one: what was recorded as reported was never
@@ -712,8 +719,9 @@ private:
         defer([this, deviceId, channelId, fields]() {
             v1::Utf8String error;
             if (!sendChannelObjectStateUpdated(deviceId, channelId, fields, nowMs(), &error))
-                std::cerr << "failed to send channelStateUpdated(" << channelId
-                          << "): " << error << '\n';
+                log(sdk::LogLevel::Error, sdk::LogCategory::Internal,
+                    "failed to send channelStateUpdated(%1): %2",
+                    {v1::Utf8String(channelId), error});
         });
     }
 
@@ -738,8 +746,9 @@ private:
         defer([this, deviceId, channelId, value]() {
             v1::Utf8String error;
             if (!sendChannelStateUpdated(deviceId, channelId, value, nowMs(), &error))
-                std::cerr << "failed to send channelStateUpdated(" << channelId
-                          << "): " << error << '\n';
+                log(sdk::LogLevel::Error, sdk::LogCategory::Internal,
+                    "failed to send channelStateUpdated(%1): %2",
+                    {v1::Utf8String(channelId), error});
         });
     }
 
@@ -761,7 +770,8 @@ private:
         armPollTimer();
         v1::Utf8String error;
         if (!sendConnectionStateChanged(m_connected, &error))
-            std::cerr << "failed to send connectionStateChanged: " << error << '\n';
+            log(sdk::LogLevel::Error, sdk::LogCategory::Internal,
+                "failed to send connectionStateChanged: %1", {error});
     }
 
     /// What a step could not do, kept for the end of the poll: the reason the
@@ -783,7 +793,8 @@ private:
             applyConfig();
             v1::Utf8String error;
             if (!sendAdapterMetaUpdated({{"trackedMacs", trackedList()}}, &error))
-                std::cerr << "failed to send adapterMetaUpdated(settings): " << error << '\n';
+                log(sdk::LogLevel::Error, sdk::LogCategory::Internal,
+                    "failed to send adapterMetaUpdated(settings): %1", {error});
         }
 
         answerAction(request.cmdId, v1::CmdStatus::Success, {}, formValues(), fieldChoices());
@@ -932,10 +943,13 @@ private:
             hostList.push_back(entry);
         v1::Utf8String error;
         if (!writeStateFile(kKnownHostsFile, dump(Json{{"hosts", hostList}}), &error))
-            std::cerr << "fritz-ipc browseHosts: " << error << '\n';
+            log(sdk::LogLevel::Error, sdk::LogCategory::Database,
+                "the known hosts could not be written: %1", {error});
 
-        std::cerr << "fritz-ipc browseHosts hosts=" << hosts.size()
-                  << " known=" << known.size() << " tracked=" << m_trackedMacs.size() << '\n';
+        log(sdk::LogLevel::Info, sdk::LogCategory::Discovery,
+            "browsed the hosts: %1 seen, %2 known, %3 tracked",
+            {static_cast<std::int64_t>(hosts.size()), static_cast<std::int64_t>(known.size()),
+             static_cast<std::int64_t>(m_trackedMacs.size())});
 
         answerAction(cmdId, v1::CmdStatus::Success, {}, formValues(), fieldChoices());
     }
@@ -978,7 +992,8 @@ private:
     {
         v1::Utf8String error;
         if (!sendResult(response, &error))
-            std::cerr << "fritz-ipc sendResult failed: " << error << '\n';
+            log(sdk::LogLevel::Error, sdk::LogCategory::Internal, "failed to send the result: %1",
+                {error});
     }
 
     void answerCommand(v1::CmdId cmdId, v1::CmdStatus status, const std::string &error)
@@ -1003,7 +1018,8 @@ private:
         }
         v1::Utf8String sendError;
         if (!sendResult(response, &sendError))
-            std::cerr << "fritz-ipc sendResult failed: " << sendError << '\n';
+            log(sdk::LogLevel::Error, sdk::LogCategory::Internal, "failed to send the result: %1",
+                {sendError});
     }
 
     /// Nothing is queued here - the session runs one call at a time and a user

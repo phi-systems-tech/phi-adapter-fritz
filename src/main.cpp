@@ -100,8 +100,8 @@ protected:
             m_session.emplace(*loop);
         }
 
-        std::cerr << "fritz-ipc probe endpoint=" << target.endpoint()
-                  << " userSet=" << (target.user.empty() ? "false" : "true") << '\n';
+        log(sdk::LogLevel::Debug, sdk::LogCategory::Discovery, "probing %1 (user set: %2)",
+            {v1::Utf8String(target.endpoint()), !target.user.empty()});
 
         const v1::CmdId cmdId = request.cmdId;
         const std::string endpoint = target.endpoint();
@@ -141,7 +141,8 @@ private:
     {
         v1::Utf8String error;
         if (!sendResult(response, &error))
-            std::cerr << "failed to send factory.action.invoke result: " << error << '\n';
+            log(sdk::LogLevel::Error, sdk::LogCategory::Internal,
+                "failed to send the factory.action.invoke result: %1", {error});
     }
 
     std::optional<Tr064Session> m_session;
@@ -156,6 +157,7 @@ int main(int argc, char **argv)
         ? argv[1]
         : (envSocketPath ? envSocketPath : v1::Utf8String("/tmp/phi-adapter-fritz-ipc.sock"));
 
+    // Before the dispatcher exists there is nowhere else to say this.
     std::cerr << "starting phi_adapter_fritz_ipc for pluginType=" << kPluginType
               << " socket=" << socketPath << '\n';
 
