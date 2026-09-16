@@ -1,3 +1,11 @@
+phi-adapter-fritz (0.0~git202609161503.05f85f6-1) trixie; urgency=medium
+
+  * Say nothing the host already said: no stderr banner, config.changed
+    now logs the router and the hosts tracked instead of echoing the
+    request.
+
+ -- Marius Schumacher <marius.schumacher@phisys.com>  Wed, 16 Sep 2026 15:03:44 +0200
+
 phi-adapter-fritz (0.0~git202609161411.29ed11e-1) trixie; urgency=medium
 
   * Log with levels instead of stderr: adapter-domain logging goes
