@@ -1,3 +1,12 @@
+phi-adapter-fritz (0.0~git202609161411.29ed11e-1) trixie; urgency=medium
+
+  * Log with levels instead of stderr: adapter-domain logging goes
+    through the SDK logger, no more raw stderr writes that core stamps
+    Warn.
+  * Build-Depends and Depends bumped to phi-adapter-sdk (>= 0.19.0).
+
+ -- Marius Schumacher <marius.schumacher@phisys.com>  Wed, 16 Sep 2026 14:11:10 +0200
+
 phi-adapter-fritz (0.0~git202609161201.198812d-1) trixie; urgency=medium
 
   * fritz: back off from a router that is not answering
