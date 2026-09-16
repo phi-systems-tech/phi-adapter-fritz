@@ -3,7 +3,6 @@
 // fritz_tr064 and fritz_soap.
 
 #include <cstdlib>
-#include <iostream>
 #include <memory>
 #include <optional>
 #include <string>
@@ -157,9 +156,6 @@ int main(int argc, char **argv)
         ? argv[1]
         : (envSocketPath ? envSocketPath : v1::Utf8String("/tmp/phi-adapter-fritz-ipc.sock"));
 
-    // Before the dispatcher exists there is nowhere else to say this.
-    std::cerr << "starting phi_adapter_fritz_ipc for pluginType=" << kPluginType
-              << " socket=" << socketPath << '\n';
 
     FritzIpcFactory factory;
     sdk::SidecarHost host(socketPath, factory);

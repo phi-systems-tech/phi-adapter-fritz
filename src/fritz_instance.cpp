@@ -140,10 +140,8 @@ protected:
         m_router.forget();
         m_pollsSinceSlow = kSlowPollEvery;   // the first poll asks for everything
 
-        log(sdk::LogLevel::Debug, sdk::LogCategory::Config,
-            "config.changed adapterId=%1 externalId=%2 tracked=%3",
-            {static_cast<std::int64_t>(request.adapterId), m_info.externalId,
-             static_cast<std::int64_t>(m_trackedMacs.size())});
+        log(sdk::LogLevel::Debug, sdk::LogCategory::Config, "router at %1, %2 hosts tracked",
+            {m_info.externalId, static_cast<std::int64_t>(m_trackedMacs.size())});
 
         armPollTimer();
         beginPoll();
