@@ -1,3 +1,9 @@
+phi-adapter-fritz (0.0~git202609161201.198812d-1) trixie; urgency=medium
+
+  * fritz: back off from a router that is not answering
+
+ -- Marius Schumacher <marius.schumacher@phisys.com>  Wed, 16 Sep 2026 12:01:13 +0200
+
 phi-adapter-fritz (0.0~git202609151747.4799d8b-1) trixie; urgency=medium
 
   * Built against SDK 0.17.
