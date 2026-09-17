@@ -70,7 +70,7 @@ ProbeTarget probeTargetFromParams(const Json &params)
     if (target.port == 0)
         target.port = normalizedPort(jsonInt(meta, "tr064Port", 0));
 
-    // 0x1 is AdapterFlag::UseTls.
+    // 0x1 is AdapterOption::UseTls.
     const int flags = form.contains("flags") ? jsonInt(form, "flags", 0)
                                              : jsonInt(candidate, "flags", 0);
     target.useTls = (flags & 0x1) != 0;

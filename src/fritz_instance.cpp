@@ -275,7 +275,7 @@ private:
         // TLS is not offered by this client yet, and the adapter in the field
         // does not use it; a UseTls flag would produce an https URL the client
         // refuses with a plain message rather than a silent failure.
-        const bool tls = v1::hasFlag(m_info.flags, v1::AdapterFlag::UseTls);
+        const bool tls = v1::hasFlag(m_info.options, v1::AdapterOption::UseTls);
         return std::string(tls ? "https://" : "http://") + address + ":" + str::number(m_port);
     }
 

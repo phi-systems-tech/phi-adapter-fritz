@@ -139,9 +139,9 @@ v1::AdapterCapabilities capabilities()
 {
     v1::AdapterCapabilities caps;
     caps.required = v1::AdapterRequirement::UsesRetryInterval;
-    caps.flags = v1::AdapterFlag::SupportsDiscovery
-        | v1::AdapterFlag::SupportsProbe
-        | v1::AdapterFlag::RequiresPolling;
+    caps.flags = v1::AdapterCapability::SupportsDiscovery
+        | v1::AdapterCapability::SupportsProbe
+        | v1::AdapterCapability::RequiresPolling;
 
     v1::AdapterActionDescriptor browse;
     browse.id = "browseHosts";
