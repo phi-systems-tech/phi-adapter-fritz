@@ -6,6 +6,7 @@
 /debian/*.debhelper.log
 /debian/*.substvars
 /debian/*/
+!/debian/source/
 /.idea/
 /.vscode/
 .DS_Store
