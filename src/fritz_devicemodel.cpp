@@ -29,7 +29,9 @@ v1::ChannelList buildRouterChannels(bool hasWlan24, bool hasWlan5, bool hasRates
     uptime.name = "Uptime";
     uptime.kind = v1::ChannelKind::Unknown;
     uptime.dataType = v1::ChannelDataType::Int;
-    uptime.flags = v1::kChannelFlagDefaultRead;
+    // Shown, not kept: a number that counts up once a poll was a third of a
+    // million history rows a month and says nothing a restart time does not.
+    uptime.flags = v1::kChannelFlagDefaultRead | v1::ChannelFlag::NoHistory;
     uptime.unit = "s";
     channels.push_back(std::move(uptime));
 
@@ -73,7 +75,9 @@ v1::ChannelList buildRouterChannels(bool hasWlan24, bool hasWlan5, bool hasRates
         tx.name = "TX rate";
         tx.kind = v1::ChannelKind::Unknown;
         tx.dataType = v1::ChannelDataType::Float;
-        tx.flags = v1::kChannelFlagDefaultRead;
+        // A rate per poll, as many rows as the uptime; a household that wants
+        // the curve switches its history on.
+        tx.flags = v1::kChannelFlagDefaultRead | v1::ChannelFlag::NoHistory;
         tx.unit = "kbit/s";
         channels.push_back(std::move(tx));
 
@@ -82,7 +86,7 @@ v1::ChannelList buildRouterChannels(bool hasWlan24, bool hasWlan5, bool hasRates
         rx.name = "RX rate";
         rx.kind = v1::ChannelKind::Unknown;
         rx.dataType = v1::ChannelDataType::Float;
-        rx.flags = v1::kChannelFlagDefaultRead;
+        rx.flags = v1::kChannelFlagDefaultRead | v1::ChannelFlag::NoHistory;
         rx.unit = "kbit/s";
         channels.push_back(std::move(rx));
     }
