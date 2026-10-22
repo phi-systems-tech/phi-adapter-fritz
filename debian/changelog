@@ -1,3 +1,9 @@
+phi-adapter-fritz (0.0~git202610221933.940b325-1) trixie; urgency=medium
+
+  * Rebuilt against phi-adapter-sdk 0.24.0 (RoomClass in v1::Room).
+
+ -- Marius Schumacher <marius.schumacher@phisys.com>  Thu, 22 Oct 2026 19:33:52 +0200
+
 phi-adapter-fritz (0.0~git202610152135.9b193bf-1) trixie; urgency=medium
 
   * Uptime and rate channels are NoHistory; build against SDK 0.23.0
