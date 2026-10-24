@@ -1,3 +1,10 @@
+phi-adapter-fritz (0.0~git202610241859.d8f223b-1) trixie; urgency=medium
+
+  * Reports never shrink: a wireless host keeps its RSSI, the router
+    its features after a restart
+
+ -- Marius Schumacher <marius.schumacher@phisys.com>  Sat, 24 Oct 2026 18:59:37 +0200
+
 phi-adapter-fritz (0.0~git202610241702.a5de841-1) trixie; urgency=medium
 
   * Rebuilt against phi-adapter-sdk 0.25.0 (cameraFeatures, voice and
