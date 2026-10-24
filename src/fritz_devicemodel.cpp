@@ -126,7 +126,7 @@ v1::Device buildHostDevice(const HostEntry &host)
     return device;
 }
 
-v1::ChannelList buildHostChannels(const HostEntry &host)
+v1::ChannelList buildHostChannels(const HostEntry &host, bool wireless)
 {
     v1::ChannelList channels;
 
@@ -138,7 +138,7 @@ v1::ChannelList buildHostChannels(const HostEntry &host)
     online.flags = v1::kChannelFlagDefaultRead;
     channels.push_back(std::move(online));
 
-    if (host.hasSignal) {
+    if (host.hasSignal || wireless) {
         v1::Channel rssi;
         rssi.externalId = kChannelRssi;
         rssi.name = "RSSI";
@@ -161,12 +161,12 @@ std::string routerFingerprint(const std::string &name, const std::string &firmwa
         + (hasWlan5 ? "1" : "0") + (hasRates ? "1" : "0") + (hasUpdateState ? "1" : "0");
 }
 
-std::string hostFingerprint(const HostEntry &host)
+std::string hostFingerprint(const HostEntry &host, bool wireless)
 {
     // Not `active`: that is a channel value, and a device whose descriptor
     // changes every time it goes offline is a device announced twice a minute.
     return host.mac + "\x1f" + host.name + "\x1f" + host.ip + "\x1f" + host.interfaceType
-        + "\x1f" + (host.hasSignal ? "1" : "0");
+        + "\x1f" + (host.hasSignal || wireless ? "1" : "0");
 }
 
 } // namespace phicore::fritz::ipc

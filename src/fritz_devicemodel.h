@@ -38,7 +38,9 @@ phicore::adapter::v1::Device buildRouterDevice(const std::string &name,
                                                const std::string &firmware);
 
 phicore::adapter::v1::Device buildHostDevice(const HostEntry &host);
-phicore::adapter::v1::ChannelList buildHostChannels(const HostEntry &host);
+/// `wireless`: the host has had a signal strength once (or now); its RSSI
+/// channel stays while it sleeps or is away - Online says that it is.
+phicore::adapter::v1::ChannelList buildHostChannels(const HostEntry &host, bool wireless);
 
 /// Everything the descriptors above are built from, in one string. Two equal
 /// ones describe the same device, so the second need not be sent.
@@ -48,6 +50,6 @@ std::string routerFingerprint(const std::string &name,
                               bool hasWlan5,
                               bool hasRates,
                               bool hasUpdateState);
-std::string hostFingerprint(const HostEntry &host);
+std::string hostFingerprint(const HostEntry &host, bool wireless);
 
 } // namespace phicore::fritz::ipc

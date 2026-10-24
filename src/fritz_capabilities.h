@@ -75,6 +75,27 @@ public:
      */
     void forget() { m_state.fill(Availability::Unknown); }
 
+    /// The features that answered, as a bit mask: what the adapter keeps
+    /// across restarts, so its first report after a start is as complete as
+    /// its last one before it (SDK README, "A Device's Channels").
+    [[nodiscard]] unsigned presentMask() const
+    {
+        unsigned mask = 0;
+        for (std::size_t i = 0; i < m_state.size(); ++i)
+            if (m_state[i] == Availability::Present)
+                mask |= 1u << i;
+        return mask;
+    }
+
+    /// Takes back what was present before a restart; what has been learned
+    /// since (Present or Absent) stays.
+    void restorePresent(unsigned mask)
+    {
+        for (std::size_t i = 0; i < m_state.size(); ++i)
+            if ((mask & (1u << i)) != 0 && m_state[i] == Availability::Unknown)
+                m_state[i] = Availability::Present;
+    }
+
 private:
     std::array<Availability, static_cast<std::size_t>(Feature::Count)> m_state{};
 };

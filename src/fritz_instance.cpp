@@ -5,6 +5,7 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -137,6 +138,8 @@ protected:
             m_routerAnnounced = false;
             setConnected(false);
         }
+        if (endpoint() != previousEndpoint)
+            restoreState();
         m_router.forget();
         m_pollsSinceSlow = kSlowPollEvery;   // the first poll asks for everything
 
@@ -666,6 +669,7 @@ private:
             return;
         }
         m_routerAnnounced = true;
+        saveState();
         // The descriptor changed, so this may be the first time phi-core knows
         // about one of these channels - and a value sent before it did was
         // dropped as an unknown channel id, silently, because the send
@@ -677,9 +681,12 @@ private:
     {
         if (host.mac.empty())
             return;
-        if (m_reported.descriptorIsNews(host.mac, hostFingerprint(host))) {
+        if (host.hasSignal && m_wirelessHosts.insert(host.mac).second)
+            saveState();
+        const bool wireless = m_wirelessHosts.count(host.mac) > 0;
+        if (m_reported.descriptorIsNews(host.mac, hostFingerprint(host, wireless))) {
             v1::Utf8String error;
-            if (!sendDeviceUpdated(buildHostDevice(host), buildHostChannels(host), &error)) {
+            if (!sendDeviceUpdated(buildHostDevice(host), buildHostChannels(host, wireless), &error)) {
                 log(sdk::LogLevel::Error, sdk::LogCategory::Internal,
                     "failed to send deviceUpdated(host): %1", {error});
             } else {
@@ -1059,6 +1066,39 @@ private:
     int m_retryIntervalMs = 10000;
 
     RouterCapabilities m_capabilities;
+    // Hosts that have had a signal strength: their RSSI channel stays.
+    std::set<std::string> m_wirelessHosts;
+
+    // What this router could do and which hosts are wireless, kept for the
+    // endpoint across restarts: a report is never smaller after a start than
+    // before it (SDK README, "A Device's Channels").
+    void restoreState()
+    {
+        m_wirelessHosts.clear();
+        const std::optional<std::string> saved = readStateFile("router.json");
+        if (!saved)
+            return;
+        const Json doc = parseObject(*saved);
+        if (jsonString(doc, "endpoint") != endpoint())
+            return;
+        m_capabilities.restorePresent(static_cast<unsigned>(jsonInt(doc, "present", 0)));
+        const auto hosts = doc.find("wirelessHosts");
+        if (hosts != doc.end() && hosts->is_array())
+            for (const Json &mac : *hosts)
+                if (mac.is_string())
+                    m_wirelessHosts.insert(mac.get<std::string>());
+    }
+
+    void saveState()
+    {
+        Json hosts = Json::array();
+        for (const std::string &mac : m_wirelessHosts)
+            hosts.push_back(mac);
+        const Json doc = {{"endpoint", endpoint()}, {"present", m_capabilities.presentMask()}, {"wirelessHosts", hosts}};
+        v1::Utf8String error;
+        if (!writeStateFile("router.json", doc.dump(), &error))
+            log(sdk::LogLevel::Warn, sdk::LogCategory::Internal, "router state not saved: %1", {error});
+    }
     ReportedValues m_reported;
     RateMeter m_txMeter;
     RateMeter m_rxMeter;

@@ -166,12 +166,12 @@ void testADeviceIsNotReannouncedForGoingOffline()
     offline.active = false;
     // `active` is a channel value, not part of what the device is. A descriptor
     // that changes with it is a device announced twice a minute.
-    PHI_CHECK_MSG(hostFingerprint(host) == hostFingerprint(offline),
+    PHI_CHECK_MSG(hostFingerprint(host, false) == hostFingerprint(offline, false),
                   "going offline changed the device descriptor");
 
     HostEntry renamed = host;
     renamed.ip = "192.168.1.6";
-    PHI_CHECK(hostFingerprint(host) != hostFingerprint(renamed));
+    PHI_CHECK(hostFingerprint(host, false) != hostFingerprint(renamed, false));
 
     const v1::Device device = buildHostDevice(host);
     PHI_CHECK(device.externalId == "aa:bb:cc:dd:ee:ff");
@@ -183,11 +183,15 @@ void testADeviceIsNotReannouncedForGoingOffline()
     PHI_CHECK(!v1::hasFlag(buildHostDevice(wired).flags, v1::DeviceFlag::Wireless));
 
     // No signal, no RSSI channel.
-    PHI_CHECK(buildHostChannels(host).size() == 1);
+    PHI_CHECK(buildHostChannels(host, false).size() == 1);
     HostEntry wifi = host;
     wifi.hasSignal = true;
     wifi.signalDbm = -58;
-    PHI_CHECK(buildHostChannels(wifi).size() == 2);
+    PHI_CHECK(buildHostChannels(wifi, false).size() == 2);
+    // Asleep or away, a wireless host keeps its RSSI channel: Online says it is gone.
+    PHI_CHECK(buildHostChannels(host, true).size() == 2);
+    // The same device whether the signal is in this poll or not.
+    PHI_CHECK(hostFingerprint(host, true) == hostFingerprint(wifi, true));
 }
 
 void testWhereTheProbeGetsItsValues()
