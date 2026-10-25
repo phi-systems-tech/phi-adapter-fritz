@@ -26,11 +26,8 @@ constexpr const char kFritzIconSvg[] =
 v1::AdapterConfigField field(const char *key, v1::AdapterConfigFieldType type, const char *label,
                              v1::ScalarValue defaultValue = {})
 {
-    v1::AdapterConfigField out;
-    out.key = key;
-    out.type = type;
-    out.label = label;
-    out.defaultValue = std::move(defaultValue);
+    v1::AdapterConfigField out(key, type, label);
+    out.setDefaultValue(std::move(defaultValue));
     return out;
 }
 
@@ -42,36 +39,36 @@ v1::AdapterConfigSchema buildFritzConfigSchema()
 
     // Two columns: the address beside its port, the account beside its
     // password, the two intervals short.
-    v1::AdapterConfigSection &factory = schema.factory;
-    factory.title = "FRITZ!Box";
-    factory.description = "Connect via TR-064 to track network clients.";
-    factory.layout.columns = 2;
+    v1::AdapterConfigSection &factory = schema.factory();
+    factory.setTitle("FRITZ!Box");
+    factory.setDescription("Connect via TR-064 to track network clients.");
+    factory.layout().setColumns(2);
     v1::AdapterConfigField host = field("host", Type::Hostname, "Host");
-    host.flags = Flag::Required;
+    host.setFlags(Flag::Required);
     v1::AdapterConfigField port = field("tr064Port", Type::Integer, "TR-064 port", std::int64_t{kDefaultTr064Port});
-    port.flags = Flag::Required;
-    port.layout.controlWidth = v1::AdapterConfigSize::Narrow;
+    port.setFlags(Flag::Required);
+    port.layout().setControlWidth(v1::AdapterConfigSize::Narrow);
     v1::AdapterConfigField user = field("user", Type::String, "Username");
-    user.flags = Flag::Required;
+    user.setFlags(Flag::Required);
     v1::AdapterConfigField password = field("password", Type::Password, "Password");
-    password.flags = Flag::Required | Flag::Secret;
+    password.setFlags(Flag::Required | Flag::Secret);
     v1::AdapterConfigField poll = field("pollIntervalMs", Type::Integer, "Poll interval", std::int64_t{5000});
-    poll.layout.controlWidth = v1::AdapterConfigSize::Narrow;
+    poll.layout().setControlWidth(v1::AdapterConfigSize::Narrow);
     v1::AdapterConfigField retry = field("retryIntervalMs", Type::Integer, "Retry interval", std::int64_t{10000});
-    retry.layout.controlWidth = v1::AdapterConfigSize::Narrow;
-    factory.fields = {host, port, user, password, poll, retry};
+    retry.layout().setControlWidth(v1::AdapterConfigSize::Narrow);
+    factory.setFields({host, port, user, password, poll, retry});
 
     // One list that can grow long: above its full width, the probe below it.
-    v1::AdapterConfigSection &instance = schema.instance;
-    instance.title = "FRITZ!Box";
-    instance.description = "Connect via TR-064 to track network clients.";
+    v1::AdapterConfigSection &instance = schema.instance();
+    instance.setTitle("FRITZ!Box");
+    instance.setDescription("Connect via TR-064 to track network clients.");
     v1::AdapterConfigField tracked = field("trackedMacs", Type::Select, "Tracked devices", {});
-    tracked.parentActionId = "settings";
-    tracked.flags = Flag::Multi | Flag::InstanceOnly;
-    tracked.actions = {{"browseHosts", "Probe WLAN"}};
-    tracked.layout.labelPosition = v1::AdapterConfigLabelPosition::Top;
-    tracked.layout.actionPosition = v1::AdapterConfigActionPosition::Below;
-    instance.fields = {tracked};
+    tracked.setParentActionId("settings");
+    tracked.setFlags(Flag::Multi | Flag::InstanceOnly);
+    tracked.addAction("browseHosts", "Probe WLAN");
+    tracked.layout().setLabelPosition(v1::AdapterConfigLabelPosition::Top);
+    tracked.layout().setActionPosition(v1::AdapterConfigActionPosition::Below);
+    instance.setFields({tracked});
     return schema;
 }
 
@@ -138,31 +135,22 @@ v1::Utf8String iconSvg()
 v1::AdapterCapabilities capabilities()
 {
     v1::AdapterCapabilities caps;
-    caps.required = v1::AdapterRequirement::UsesRetryInterval;
-    caps.flags = v1::AdapterCapability::SupportsDiscovery
+    caps.setRequired(v1::AdapterRequirement::UsesRetryInterval);
+    caps.setFlags(v1::AdapterCapability::SupportsDiscovery
         | v1::AdapterCapability::SupportsProbe
-        | v1::AdapterCapability::RequiresPolling;
+        | v1::AdapterCapability::RequiresPolling);
 
-    v1::AdapterActionDescriptor browse;
-    browse.id = "browseHosts";
-    browse.label = "Probe WLAN";
-    browse.description = "Fetch current WLAN/LAN clients";
-    browse.placement = v1::AdapterActionPlacement::Field;
-    caps.instanceActions.push_back(browse);
+    v1::AdapterActionDescriptor browse("browseHosts", "Probe WLAN", "Fetch current WLAN/LAN clients");
+    browse.setPlacement(v1::AdapterActionPlacement::Field);
+    caps.addInstanceAction(browse);
 
-    v1::AdapterActionDescriptor settings;
-    settings.id = "settings";
-    settings.label = "Settings";
-    settings.description = "Edit tracked devices.";
-    settings.hasForm = true;
-    settings.loadFormOnOpen = true;
-    caps.instanceActions.push_back(settings);
+    v1::AdapterActionDescriptor settings("settings", "Settings", "Edit tracked devices.");
+    settings.setHasForm(true);
+    settings.setLoadFormOnOpen(true);
+    caps.addInstanceAction(settings);
 
-    v1::AdapterActionDescriptor probe;
-    probe.id = "probe";
-    probe.label = "Test connection";
-    probe.description = "Reachability and credentials check";
-    caps.factoryActions.push_back(probe);
+    v1::AdapterActionDescriptor probe("probe", "Test connection", "Reachability and credentials check");
+    caps.addFactoryAction(probe);
 
     return caps;
 }

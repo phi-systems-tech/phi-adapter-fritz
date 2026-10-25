@@ -123,8 +123,8 @@ protected:
             return;
 
         const std::string previousEndpoint = endpoint();
-        m_info = request.adapter;
-        m_meta = parseObject(request.adapter.metaJson);
+        m_info = request.adapter();
+        m_meta = parseObject(request.adapter().metaJson());
         applyConfig();
 
         m_lifecycle = Lifecycle::Running;
@@ -144,7 +144,7 @@ protected:
         m_pollsSinceSlow = kSlowPollEvery;   // the first poll asks for everything
 
         log(sdk::LogLevel::Debug, sdk::LogCategory::Config, "router at %1, %2 hosts tracked",
-            {m_info.externalId, static_cast<std::int64_t>(m_trackedMacs.size())});
+            {m_info.externalId(), static_cast<std::int64_t>(m_trackedMacs.size())});
 
         armPollTimer();
         beginPoll();
@@ -153,29 +153,29 @@ protected:
     void onChannelInvoke(const sdk::ChannelInvokeRequest &request) override
     {
         if (m_lifecycle != Lifecycle::Running || !m_session) {
-            answerCommand(request.cmdId, v1::CmdStatus::TemporarilyOffline,
+            answerCommand(request.cmdId(), v1::CmdStatus::TemporarilyOffline,
                           "Instance is not running");
             return;
         }
-        if (request.deviceExternalId != kRouterDeviceId) {
-            answerCommand(request.cmdId, v1::CmdStatus::NotSupported,
+        if (request.deviceExternalId() != kRouterDeviceId) {
+            answerCommand(request.cmdId(), v1::CmdStatus::NotSupported,
                           "Channel only supported for router device");
             return;
         }
-        const std::optional<bool> enabled = scalarToBool(request.value);
+        const std::optional<bool> enabled = scalarToBool(request.value());
         if (!enabled.has_value()) {
-            answerCommand(request.cmdId, v1::CmdStatus::InvalidArgument, "Expected boolean value");
+            answerCommand(request.cmdId(), v1::CmdStatus::InvalidArgument, "Expected boolean value");
             return;
         }
 
-        const bool is24 = request.channelExternalId == kChannelWlan24;
-        const bool is5 = request.channelExternalId == kChannelWlan5;
+        const bool is24 = request.channelExternalId() == kChannelWlan24;
+        const bool is5 = request.channelExternalId() == kChannelWlan5;
         if (!is24 && !is5) {
-            answerCommand(request.cmdId, v1::CmdStatus::NotSupported, "Channel not supported");
+            answerCommand(request.cmdId(), v1::CmdStatus::NotSupported, "Channel not supported");
             return;
         }
         if (!m_session->addressable()) {
-            answerCommand(request.cmdId, v1::CmdStatus::TemporarilyOffline, "Host/IP is required");
+            answerCommand(request.cmdId(), v1::CmdStatus::TemporarilyOffline, "Host/IP is required");
             return;
         }
 
@@ -184,8 +184,8 @@ protected:
         m_pollRunning = false;
 
         const Service &service = is24 ? kWlan24 : kWlan5;
-        const std::string channel(request.channelExternalId);
-        const v1::CmdId cmdId = request.cmdId;
+        const std::string channel(request.channelExternalId());
+        const v1::CmdId cmdId = request.cmdId();
         const bool wanted = *enabled;
         m_session->call(service, "SetEnable", {{"NewEnable", toSoapBoolean(wanted)}},
                         [this, cmdId, channel, wanted](Tr064Session::Reply reply) {
@@ -197,7 +197,7 @@ protected:
                             }
                             v1::CmdResponse response = responseFor(cmdId, v1::CmdStatus::Success,
                                                                    {});
-                            response.finalValue = wanted;
+                            response.setFinalValue(wanted);
                             // The value is recorded as reported before it is
                             // sent, so the poll that is already on its way with
                             // the old reading cannot put the switch back.
@@ -208,7 +208,7 @@ protected:
 
     void onAdapterActionInvoke(const sdk::AdapterActionInvokeRequest &request) override
     {
-        const std::string actionId = str::trimmed(request.actionId);
+        const std::string actionId = str::trimmed(request.actionId());
         if (actionId == "settings") {
             handleSettings(request);
             return;
@@ -217,22 +217,22 @@ protected:
             handleBrowseHosts(request);
             return;
         }
-        answerAction(request.cmdId, v1::CmdStatus::NotSupported, "Adapter action not supported");
+        answerAction(request.cmdId(), v1::CmdStatus::NotSupported, "Adapter action not supported");
     }
 
     void onDeviceNameUpdate(const sdk::DeviceNameUpdateRequest &request) override
     {
-        answerCommand(request.cmdId, v1::CmdStatus::NotImplemented, "Device rename not supported");
+        answerCommand(request.cmdId(), v1::CmdStatus::NotImplemented, "Device rename not supported");
     }
 
     void onDeviceEffectInvoke(const sdk::DeviceEffectInvokeRequest &request) override
     {
-        answerCommand(request.cmdId, v1::CmdStatus::NotImplemented, "Device effect not supported");
+        answerCommand(request.cmdId(), v1::CmdStatus::NotImplemented, "Device effect not supported");
     }
 
     void onSceneInvoke(const sdk::SceneInvokeRequest &request) override
     {
-        answerCommand(request.cmdId, v1::CmdStatus::NotImplemented,
+        answerCommand(request.cmdId(), v1::CmdStatus::NotImplemented,
                       "Scene invocation not supported");
     }
 
@@ -248,7 +248,7 @@ private:
         m_router = sdk::Reachability(routerPolicy());
         m_nextPollMs = m_pollIntervalMs;
         const std::uint16_t configured = normalizedPort(jsonInt(m_meta, "tr064Port", 0));
-        const std::uint16_t discovered = normalizedPort(static_cast<int>(m_info.port));
+        const std::uint16_t discovered = normalizedPort(static_cast<int>(m_info.port()));
         m_port = configured > 0 ? configured
                                 : (discovered > 0 ? discovered : kDefaultTr064Port);
 
@@ -258,16 +258,16 @@ private:
 
         if (m_session) {
             m_session->setEndpoint(endpoint());
-            m_session->setCredentials(m_info.user, m_info.password);
+            m_session->setCredentials(m_info.user(), m_info.password());
         }
     }
 
     std::string host() const
     {
-        const std::string ip = str::trimmed(m_info.ip);
+        const std::string ip = str::trimmed(m_info.ip());
         if (!ip.empty())
             return ip;
-        return str::trimmed(m_info.host);
+        return str::trimmed(m_info.host());
     }
 
     std::string endpoint() const
@@ -278,7 +278,7 @@ private:
         // TLS is not offered by this client yet, and the adapter in the field
         // does not use it; a UseTls flag would produce an https URL the client
         // refuses with a plain message rather than a silent failure.
-        const bool tls = v1::hasFlag(m_info.options, v1::AdapterOption::UseTls);
+        const bool tls = v1::hasFlag(m_info.options(), v1::AdapterOption::UseTls);
         return std::string(tls ? "https://" : "http://") + address + ":" + str::number(m_port);
     }
 
@@ -791,10 +791,10 @@ private:
 
     void handleSettings(const sdk::AdapterActionInvokeRequest &request)
     {
-        const Json params = parseObject(request.paramsJson);
+        const Json params = parseObject(request.paramsJson());
         if (params.contains("trackedMacs")) {
             m_meta["trackedMacs"] = macList(params.at("trackedMacs"));
-            m_info.metaJson = dump(m_meta);
+            m_info.setMetaJson(dump(m_meta));
             applyConfig();
             v1::Utf8String error;
             if (!sendAdapterMetaUpdated({{"trackedMacs", trackedList()}}, &error))
@@ -802,7 +802,7 @@ private:
                     "failed to send adapterMetaUpdated(settings): %1", {error});
         }
 
-        answerAction(request.cmdId, v1::CmdStatus::Success, {}, formValues(), fieldChoices());
+        answerAction(request.cmdId(), v1::CmdStatus::Success, {}, formValues(), fieldChoices());
 
         if (m_lifecycle == Lifecycle::Running) {
             armPollTimer();
@@ -823,13 +823,13 @@ private:
     void handleBrowseHosts(const sdk::AdapterActionInvokeRequest &request)
     {
         if (m_lifecycle != Lifecycle::Running || !m_session || !m_session->addressable()) {
-            answerAction(request.cmdId, v1::CmdStatus::TemporarilyOffline, "Host/IP is required");
+            answerAction(request.cmdId(), v1::CmdStatus::TemporarilyOffline, "Host/IP is required");
             return;
         }
         m_session->cancel();
         m_pollRunning = false;
 
-        const v1::CmdId cmdId = request.cmdId;
+        const v1::CmdId cmdId = request.cmdId();
         const char *action = m_capabilities.worthTrying(Feature::AvmHostListPath)
             ? "X_AVM-DE_GetHostListPath"
             : "GetHostListPath";
@@ -985,12 +985,7 @@ private:
     static v1::CmdResponse responseFor(v1::CmdId cmdId, v1::CmdStatus status,
                                        const std::string &error)
     {
-        v1::CmdResponse response;
-        response.id = cmdId;
-        response.tsMs = nowMs();
-        response.status = status;
-        response.error = error;
-        return response;
+        return v1::CmdResponse().setId(cmdId).setTsMs(nowMs()).setStatus(status).setError(error);
     }
 
     void sendCommandResponse(v1::CmdResponse response)
@@ -1010,16 +1005,11 @@ private:
                       v1::AdapterFormValues formValues = {},
                       v1::AdapterFieldChoicesList fieldChoices = {})
     {
-        v1::ActionResponse response;
-        response.id = cmdId;
-        response.tsMs = nowMs();
-        response.status = status;
-        response.error = error;
-        response.resultType = v1::ActionResultType::None;
+        auto response = v1::ActionResponse().setId(cmdId).setTsMs(nowMs()).setStatus(status).setError(error);
         if (!formValues.empty()) {
-            response.formValues = std::move(formValues);
-            response.fieldChoices = std::move(fieldChoices);
-            response.reloadLayout = true;
+            response.setFormValues(std::move(formValues));
+            response.setFieldChoices(std::move(fieldChoices));
+            response.setReloadLayout(true);
         }
         v1::Utf8String sendError;
         if (!sendResult(response, &sendError))

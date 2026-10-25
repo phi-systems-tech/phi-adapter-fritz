@@ -76,14 +76,14 @@ protected:
      */
     void onFactoryActionInvoke(const sdk::AdapterActionInvokeRequest &request) override
     {
-        if (request.actionId != "probe") {
-            answer(request.cmdId, v1::CmdStatus::NotSupported, "Factory action not supported");
+        if (request.actionId() != "probe") {
+            answer(request.cmdId(), v1::CmdStatus::NotSupported, "Factory action not supported");
             return;
         }
 
-        const ProbeTarget target = probeTargetFromParams(parseObject(request.paramsJson));
+        const ProbeTarget target = probeTargetFromParams(parseObject(request.paramsJson()));
         if (target.host.empty()) {
-            answer(request.cmdId, v1::CmdStatus::InvalidArgument, "Probe requires host or ip");
+            answer(request.cmdId(), v1::CmdStatus::InvalidArgument, "Probe requires host or ip");
             return;
         }
 
@@ -93,7 +93,7 @@ protected:
         if (!m_session) {
             phi::runtime::Loop *loop = phi::runtime::Loop::current();
             if (loop == nullptr) {
-                answer(request.cmdId, v1::CmdStatus::Failure, "No loop on the factory thread");
+                answer(request.cmdId(), v1::CmdStatus::Failure, "No loop on the factory thread");
                 return;
             }
             m_session.emplace(*loop);
@@ -102,19 +102,15 @@ protected:
         log(sdk::LogLevel::Debug, sdk::LogCategory::Discovery, "probing %1 (user set: %2)",
             {v1::Utf8String(target.endpoint()), !target.user.empty()});
 
-        const v1::CmdId cmdId = request.cmdId;
+        const v1::CmdId cmdId = request.cmdId();
         const std::string endpoint = target.endpoint();
         runProbe(*m_session, target, [this, cmdId, endpoint](ProbeOutcome outcome) {
             if (!outcome.ok) {
                 answer(cmdId, v1::CmdStatus::Failure, outcome.error, "factory.action");
                 return;
             }
-            v1::ActionResponse response;
-            response.id = cmdId;
-            response.tsMs = 0;
-            response.status = v1::CmdStatus::Success;
-            response.resultType = v1::ActionResultType::String;
-            response.resultValue = endpoint;
+            auto response = v1::ActionResponse::success(cmdId);
+            response.setResult(endpoint, v1::ActionResultType::String);
             send(std::move(response));
         });
     }
@@ -127,13 +123,7 @@ private:
     void answer(v1::CmdId cmdId, v1::CmdStatus status, const std::string &error,
                 const std::string &context = {})
     {
-        v1::ActionResponse response;
-        response.id = cmdId;
-        response.status = status;
-        response.error = error;
-        response.errorContext = context;
-        response.resultType = v1::ActionResultType::None;
-        send(std::move(response));
+        send(v1::ActionResponse().setId(cmdId).setStatus(status).setError(error).setErrorContext(context));
     }
 
     void send(v1::ActionResponse response)

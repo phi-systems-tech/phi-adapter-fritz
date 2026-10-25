@@ -46,10 +46,10 @@ void Tr064Session::setEndpoint(std::string baseUrl)
 
 void Tr064Session::setCredentials(std::string user, std::string password)
 {
-    if (m_impl->credentials.user == user && m_impl->credentials.password == password)
+    if (m_impl->credentials.user() == user && m_impl->credentials.password() == password)
         return;
-    m_impl->credentials.user = std::move(user);
-    m_impl->credentials.password = std::move(password);
+    m_impl->credentials.setUser(std::move(user));
+    m_impl->credentials.setPassword(std::move(password));
     m_impl->client.forgetAuthentication();
 }
 
@@ -76,27 +76,22 @@ bool Tr064Session::call(const Service &service,
     if (!addressable())
         return false;
 
-    net::HttpClient::Call request;
-    request.url = m_impl->baseUrl + std::string(service.controlPath);
-    request.method = "POST";
-    request.headers = {
-        {"Content-Type", "text/xml; charset=\"utf-8\""},
-        {"SOAPAction", "\"" + std::string(service.type) + "#" + std::string(action) + "\""},
-    };
-    request.body = buildSoapEnvelope(service.type, action, params);
-    request.credentials = m_impl->credentials;
-    request.timeout = kRequestTimeout;
+    net::HttpClient::Call request(m_impl->baseUrl + std::string(service.controlPath), "POST");
+    request.setBody(buildSoapEnvelope(service.type, action, params), "text/xml; charset=\"utf-8\"");
+    request.addHeader("SOAPAction", "\"" + std::string(service.type) + "#" + std::string(action) + "\"");
+    request.setCredentials(m_impl->credentials);
+    request.setTimeout(kRequestTimeout);
 
     return m_impl->client.send(std::move(request), [done = std::move(done)](
                                                        net::HttpClient::Result result) {
         Reply reply;
-        reply.ok = result.ok;
-        reply.unauthorized = result.unauthorized;
-        reply.payload = std::move(result.body);
+        reply.ok = result.ok();
+        reply.unauthorized = result.unauthorized();
+        reply.payload = result.body();
         if (!reply.ok) {
             reply.invalidAction = isInvalidActionFault(reply.payload);
             const std::string description = faultDescription(reply.payload);
-            reply.error = description.empty() ? result.error : description;
+            reply.error = description.empty() ? result.error() : description;
         }
         if (done)
             done(std::move(reply));
@@ -108,23 +103,21 @@ bool Tr064Session::get(std::string_view path, Done done)
     if (!addressable())
         return false;
 
-    net::HttpClient::Call request;
-    request.url = m_impl->baseUrl
-        + (path.empty() || path.front() == '/' ? std::string(path) : "/" + std::string(path));
-    request.method = "GET";
-    request.credentials = m_impl->credentials;
+    net::HttpClient::Call request(m_impl->baseUrl
+        + (path.empty() || path.front() == '/' ? std::string(path) : "/" + std::string(path)));
+    request.setCredentials(m_impl->credentials);
     // The host-list document is the largest thing this adapter fetches, and it
     // is fetched when somebody is waiting for a picker to fill in.
-    request.timeout = std::chrono::milliseconds(8000);
+    request.setTimeout(std::chrono::milliseconds(8000));
 
     return m_impl->client.send(std::move(request), [done = std::move(done)](
                                                        net::HttpClient::Result result) {
         Reply reply;
-        reply.ok = result.ok;
-        reply.unauthorized = result.unauthorized;
-        reply.payload = std::move(result.body);
+        reply.ok = result.ok();
+        reply.unauthorized = result.unauthorized();
+        reply.payload = result.body();
         if (!reply.ok)
-            reply.error = result.error;
+            reply.error = result.error();
         if (done)
             done(std::move(reply));
     });

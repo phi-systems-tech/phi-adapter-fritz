@@ -128,21 +128,21 @@ void testAChannelThisRouterCannotFillIsNotOffered()
     const v1::ChannelList lean = buildRouterChannels(false, false, false, false);
     PHI_CHECK_MSG(lean.size() == 1, "%d channels, expected only uptime", int(lean.size()));
     if (!lean.empty())
-        PHI_CHECK(lean.front().externalId == kChannelUptime);
+        PHI_CHECK(lean.front().externalId() == kChannelUptime);
 
     const v1::ChannelList full = buildRouterChannels(true, true, true, true);
     PHI_CHECK(full.size() == 6);
     bool sawTx = false, sawRx = false, sawUpdate = false;
     for (const v1::Channel &channel : full) {
-        sawTx |= channel.externalId == kChannelTxRate;
-        sawRx |= channel.externalId == kChannelRxRate;
-        if (channel.externalId == kChannelSoftwareUpdate) {
+        sawTx |= channel.externalId() == kChannelTxRate;
+        sawRx |= channel.externalId() == kChannelRxRate;
+        if (channel.externalId() == kChannelSoftwareUpdate) {
             sawUpdate = true;
             // A status and two versions: composite, so it is a Json channel and
             // the kind names `status` as the field a history row and an
             // automation condition see.
-            PHI_CHECK(channel.dataType == v1::ChannelDataType::Json);
-            PHI_CHECK(v1::channelProjectionField(channel.kind) == "status");
+            PHI_CHECK(channel.dataType() == v1::ChannelDataType::Json);
+            PHI_CHECK(v1::channelProjectionField(channel.kind()) == "status");
         }
     }
     PHI_CHECK(sawTx && sawRx && sawUpdate);
@@ -174,13 +174,13 @@ void testADeviceIsNotReannouncedForGoingOffline()
     PHI_CHECK(hostFingerprint(host, false) != hostFingerprint(renamed, false));
 
     const v1::Device device = buildHostDevice(host);
-    PHI_CHECK(device.externalId == "aa:bb:cc:dd:ee:ff");
-    PHI_CHECK(device.name == "phone");
-    PHI_CHECK(v1::hasFlag(device.flags, v1::DeviceFlag::Wireless));
+    PHI_CHECK(device.externalId() == "aa:bb:cc:dd:ee:ff");
+    PHI_CHECK(device.name() == "phone");
+    PHI_CHECK(v1::hasFlag(device.flags(), v1::DeviceFlag::Wireless));
 
     HostEntry wired = host;
     wired.interfaceType = "Ethernet";
-    PHI_CHECK(!v1::hasFlag(buildHostDevice(wired).flags, v1::DeviceFlag::Wireless));
+    PHI_CHECK(!v1::hasFlag(buildHostDevice(wired).flags(), v1::DeviceFlag::Wireless));
 
     // No signal, no RSSI channel.
     PHI_CHECK(buildHostChannels(host, false).size() == 1);
@@ -239,13 +239,13 @@ void testThePickerNeverLosesASelection()
     PHI_CHECK_MSG(options.size() == 4, "%d options, expected 4", int(options.size()));
     if (options.size() != 4)
         return;
-    PHI_CHECK(options[0].value == "aa:bb:cc:dd:ee:ff");
-    PHI_CHECK(options[0].label == "phone (192.168.1.5)");
-    PHI_CHECK(options[1].label == "192.168.1.6");
-    PHI_CHECK(options[2].label == "77:88:99:aa:bb:cc");
+    PHI_CHECK(options[0].value() == "aa:bb:cc:dd:ee:ff");
+    PHI_CHECK(options[0].label() == "phone (192.168.1.5)");
+    PHI_CHECK(options[1].label() == "192.168.1.6");
+    PHI_CHECK(options[2].label() == "77:88:99:aa:bb:cc");
     // A tracked address the router no longer lists is still selectable, or the
     // selection looks like it cleared itself.
-    PHI_CHECK_MSG(options[3].value == "de:ad:be:ef:00:01",
+    PHI_CHECK_MSG(options[3].value() == "de:ad:be:ef:00:01",
                   "a tracked address dropped out of the picker");
 
     PHI_CHECK(buildTrackedOptions(Json::array(), {}).empty());

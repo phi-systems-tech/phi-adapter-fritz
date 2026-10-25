@@ -25,69 +25,69 @@ v1::ChannelList buildRouterChannels(bool hasWlan24, bool hasWlan5, bool hasRates
     v1::ChannelList channels;
 
     v1::Channel uptime;
-    uptime.externalId = kChannelUptime;
-    uptime.name = "Uptime";
-    uptime.kind = v1::ChannelKind::Unknown;
-    uptime.dataType = v1::ChannelDataType::Int;
+    uptime.setExternalId(kChannelUptime);
+    uptime.setName("Uptime");
+    uptime.setKind(v1::ChannelKind::Unknown);
+    uptime.setDataType(v1::ChannelDataType::Int);
     // Shown, not kept: a number that counts up once a poll was a third of a
     // million history rows a month and says nothing a restart time does not.
-    uptime.flags = v1::kChannelFlagDefaultRead | v1::ChannelFlag::NoHistory;
-    uptime.unit = "s";
+    uptime.setFlags(v1::kChannelFlagDefaultRead | v1::ChannelFlag::NoHistory);
+    uptime.setUnit("s");
     channels.push_back(std::move(uptime));
 
     if (hasUpdateState) {
         v1::Channel update;
-        update.externalId = kChannelSoftwareUpdate;
-        update.name = "Software Update";
-        update.kind = v1::ChannelKind::DeviceSoftwareUpdate;
+        update.setExternalId(kChannelSoftwareUpdate);
+        update.setName("Software Update");
+        update.setKind(v1::ChannelKind::DeviceSoftwareUpdate);
         // A status and two versions. Enum lost the versions, which are the
         // part a person actually reads.
-        update.dataType = v1::ChannelDataType::Json;
-        update.flags = v1::kChannelFlagDefaultRead;
+        update.setDataType(v1::ChannelDataType::Json);
+        update.setFlags(v1::kChannelFlagDefaultRead);
         channels.push_back(std::move(update));
     }
 
     if (hasWlan24) {
         v1::Channel wlan;
-        wlan.externalId = kChannelWlan24;
-        wlan.name = "WLAN 2.4 GHz";
-        wlan.kind = v1::ChannelKind::PowerOnOff;
-        wlan.dataType = v1::ChannelDataType::Bool;
-        wlan.flags = v1::kChannelFlagDefaultWrite;
-        wlan.metaJson = R"({"forceLabel":true})";
+        wlan.setExternalId(kChannelWlan24);
+        wlan.setName("WLAN 2.4 GHz");
+        wlan.setKind(v1::ChannelKind::PowerOnOff);
+        wlan.setDataType(v1::ChannelDataType::Bool);
+        wlan.setFlags(v1::kChannelFlagDefaultWrite);
+        wlan.setMetaJson(R"({"forceLabel":true})");
         channels.push_back(std::move(wlan));
     }
 
     if (hasWlan5) {
         v1::Channel wlan;
-        wlan.externalId = kChannelWlan5;
-        wlan.name = "WLAN 5 GHz";
-        wlan.kind = v1::ChannelKind::PowerOnOff;
-        wlan.dataType = v1::ChannelDataType::Bool;
-        wlan.flags = v1::kChannelFlagDefaultWrite;
-        wlan.metaJson = R"({"forceLabel":true})";
+        wlan.setExternalId(kChannelWlan5);
+        wlan.setName("WLAN 5 GHz");
+        wlan.setKind(v1::ChannelKind::PowerOnOff);
+        wlan.setDataType(v1::ChannelDataType::Bool);
+        wlan.setFlags(v1::kChannelFlagDefaultWrite);
+        wlan.setMetaJson(R"({"forceLabel":true})");
         channels.push_back(std::move(wlan));
     }
 
     if (hasRates) {
         v1::Channel tx;
-        tx.externalId = kChannelTxRate;
-        tx.name = "TX rate";
-        tx.kind = v1::ChannelKind::Unknown;
-        tx.dataType = v1::ChannelDataType::Float;
+        tx.setExternalId(kChannelTxRate);
+        tx.setName("TX rate");
+        tx.setKind(v1::ChannelKind::Unknown);
+        tx.setDataType(v1::ChannelDataType::Float);
         // A rate per poll, as many rows as the uptime; a household that wants
         // the curve switches its history on.
-        tx.flags = v1::kChannelFlagDefaultRead | v1::ChannelFlag::NoHistory;
-        tx.unit = "kbit/s";
+        tx.setFlags(v1::kChannelFlagDefaultRead | v1::ChannelFlag::NoHistory);
+        tx.setUnit("kbit/s");
         channels.push_back(std::move(tx));
 
         v1::Channel rx;
-        rx.externalId = kChannelRxRate;
-        rx.name = "RX rate";
-        rx.kind = v1::ChannelKind::Unknown;
-        rx.dataType = v1::ChannelDataType::Float;
-        rx.flags = v1::kChannelFlagDefaultRead | v1::ChannelFlag::NoHistory;
-        rx.unit = "kbit/s";
+        rx.setExternalId(kChannelRxRate);
+        rx.setName("RX rate");
+        rx.setKind(v1::ChannelKind::Unknown);
+        rx.setDataType(v1::ChannelDataType::Float);
+        rx.setFlags(v1::kChannelFlagDefaultRead | v1::ChannelFlag::NoHistory);
+        rx.setUnit("kbit/s");
         channels.push_back(std::move(rx));
     }
 
@@ -97,24 +97,24 @@ v1::ChannelList buildRouterChannels(bool hasWlan24, bool hasWlan5, bool hasRates
 v1::Device buildRouterDevice(const std::string &name, const std::string &firmware)
 {
     v1::Device device;
-    device.externalId = kRouterDeviceId;
-    device.name = name.empty() ? "FRITZ!Box" : name;
-    device.deviceClass = v1::DeviceClass::Gateway;
-    device.manufacturer = "AVM";
+    device.setExternalId(kRouterDeviceId);
+    device.setName(name.empty() ? "FRITZ!Box" : name);
+    device.setDeviceClass(v1::DeviceClass::Gateway);
+    device.setManufacturer("AVM");
     if (!firmware.empty())
-        device.firmware = firmware;
+        device.setFirmware(firmware);
     return device;
 }
 
 v1::Device buildHostDevice(const HostEntry &host)
 {
     v1::Device device;
-    device.externalId = host.mac;
-    device.name = host.name.empty() ? host.mac : host.name;
-    device.deviceClass = v1::DeviceClass::Sensor;
-    device.manufacturer = "AVM";
+    device.setExternalId(host.mac);
+    device.setName(host.name.empty() ? host.mac : host.name);
+    device.setDeviceClass(v1::DeviceClass::Sensor);
+    device.setManufacturer("AVM");
     if (looksWireless(host.interfaceType))
-        device.flags |= v1::DeviceFlag::Wireless;
+        device.setFlags(device.flags() | v1::DeviceFlag::Wireless);
 
     Json meta = Json::object();
     if (!host.ip.empty())
@@ -122,7 +122,7 @@ v1::Device buildHostDevice(const HostEntry &host)
     meta["mac"] = host.mac;
     if (!host.interfaceType.empty())
         meta["interfaceType"] = host.interfaceType;
-    device.metaJson = dump(meta);
+    device.setMetaJson(dump(meta));
     return device;
 }
 
@@ -131,23 +131,22 @@ v1::ChannelList buildHostChannels(const HostEntry &host, bool wireless)
     v1::ChannelList channels;
 
     v1::Channel online;
-    online.externalId = kChannelOnline;
-    online.name = "Online";
-    online.kind = v1::ChannelKind::ConnectivityStatus;
-    online.dataType = v1::ChannelDataType::Enum;
-    online.flags = v1::kChannelFlagDefaultRead;
+    online.setExternalId(kChannelOnline);
+    online.setName("Online");
+    online.setKind(v1::ChannelKind::ConnectivityStatus);
+    online.setDataType(v1::ChannelDataType::Enum);
+    online.setFlags(v1::kChannelFlagDefaultRead);
     channels.push_back(std::move(online));
 
     if (host.hasSignal || wireless) {
         v1::Channel rssi;
-        rssi.externalId = kChannelRssi;
-        rssi.name = "RSSI";
-        rssi.kind = v1::ChannelKind::SignalStrength;
-        rssi.dataType = v1::ChannelDataType::Float;
-        rssi.flags = v1::kChannelFlagDefaultRead;
-        rssi.unit = "dBm";
-        rssi.minValue = -100.0;
-        rssi.maxValue = 0.0;
+        rssi.setExternalId(kChannelRssi);
+        rssi.setName("RSSI");
+        rssi.setKind(v1::ChannelKind::SignalStrength);
+        rssi.setDataType(v1::ChannelDataType::Float);
+        rssi.setFlags(v1::kChannelFlagDefaultRead);
+        rssi.setUnit("dBm");
+        rssi.setRange(-100.0, 0.0);
         channels.push_back(std::move(rssi));
     }
 
