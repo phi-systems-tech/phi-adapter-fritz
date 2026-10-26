@@ -136,6 +136,7 @@ v1::AdapterCapabilities capabilities()
 {
     v1::AdapterCapabilities caps;
     caps.setRequired(v1::AdapterRequirement::UsesRetryInterval);
+    caps.setTopologies(v1::Topology::Local);
     caps.setFlags(v1::AdapterCapability::SupportsDiscovery
         | v1::AdapterCapability::SupportsProbe
         | v1::AdapterCapability::RequiresPolling);

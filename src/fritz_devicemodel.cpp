@@ -116,10 +116,12 @@ v1::Device buildHostDevice(const HostEntry &host)
     if (looksWireless(host.interfaceType))
         device.setFlags(device.flags() | v1::DeviceFlag::Wireless);
 
+    device.setMac(host.mac);
+    if (host.ip.find(':') != std::string::npos)
+        device.setIpv6(host.ip);
+    else
+        device.setIpv4(host.ip);
     Json meta = Json::object();
-    if (!host.ip.empty())
-        meta["ip"] = host.ip;
-    meta["mac"] = host.mac;
     if (!host.interfaceType.empty())
         meta["interfaceType"] = host.interfaceType;
     device.setMetaJson(dump(meta));
