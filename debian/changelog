@@ -1,3 +1,10 @@
+phi-adapter-fritz (0.0~git202610272057.cf60188-1) trixie; urgency=medium
+
+  * Presence through the SDK ClientTracker; MAC normalising from
+    libphi-runtime 0.2.1.
+
+ -- Marius Schumacher <marius.schumacher@phisys.com>  Tue, 27 Oct 2026 20:57:46 +0100
+
 phi-adapter-fritz (0.0~git202610271020.ed8f614-1) trixie; urgency=medium
 
   * Rebuilt against phi-adapter-sdk 0.29.0 (network clients).
