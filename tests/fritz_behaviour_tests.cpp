@@ -10,10 +10,16 @@
 #include "fritz_probe.h"
 #include "fritz_schema.h"
 #include "fritz_state.h"
+#include "fritz_tr064.h"
 
+#include "phi/adapter/sdk/network_clients.h"
+
+#include <map>
 #include <string>
+#include <vector>
 
 using namespace phicore::fritz::ipc;
+namespace sdk = phicore::adapter::sdk;
 namespace v1 = phicore::adapter::v1;
 
 namespace {
@@ -153,45 +159,118 @@ void testAChannelThisRouterCannotFillIsNotOffered()
               != routerFingerprint("n", "f", false, false, true, false));
 }
 
-void testADeviceIsNotReannouncedForGoingOffline()
+void testAHostBecomesASighting()
 {
-    HostEntry host;
-    host.mac = "aa:bb:cc:dd:ee:ff";
-    host.name = "phone";
-    host.ip = "192.168.1.5";
-    host.interfaceType = "802.11";
-    host.active = true;
+    // What a GetSpecificHostEntry or the host-list document said, as the
+    // tracker takes it.
+    HostEntry phone;
+    phone.mac = "aa:bb:cc:dd:ee:ff";
+    phone.name = "phone";
+    phone.ip = "192.168.1.5";
+    phone.interfaceType = "802.11";
+    phone.active = true;
+    phone.hasSignal = true;
+    phone.signalDbm = -58;
 
-    HostEntry offline = host;
-    offline.active = false;
-    // `active` is a channel value, not part of what the device is. A descriptor
-    // that changes with it is a device announced twice a minute.
-    PHI_CHECK_MSG(hostFingerprint(host, false) == hostFingerprint(offline, false),
-                  "going offline changed the device descriptor");
+    const sdk::NetworkClientSighting wifi = sightingFor(phone);
+    PHI_CHECK(wifi.mac == "aa:bb:cc:dd:ee:ff");
+    PHI_CHECK(wifi.name == "phone");
+    PHI_CHECK(wifi.ipv4 == "192.168.1.5");
+    PHI_CHECK(wifi.ipv6.empty());
+    PHI_CHECK(wifi.online);
+    PHI_CHECK(wifi.rssiDbm && *wifi.rssiDbm == -58);
+    // The box says WLAN, not which band: that stays unknown rather than guessed.
+    PHI_CHECK(wifi.band == v1::WifiBand::Unknown);
+    PHI_CHECK(wifi.accessPoint.empty());
+    PHI_CHECK(!wifi.blocked.has_value());
 
-    HostEntry renamed = host;
-    renamed.ip = "192.168.1.6";
-    PHI_CHECK(hostFingerprint(host, false) != hostFingerprint(renamed, false));
+    // Asleep or away: still listed, not online. No signal, no RSSI.
+    HostEntry asleep = phone;
+    asleep.active = false;
+    asleep.hasSignal = false;
+    const sdk::NetworkClientSighting gone = sightingFor(asleep);
+    PHI_CHECK(!gone.online);
+    PHI_CHECK(!gone.rssiDbm.has_value());
 
-    const v1::Device device = buildHostDevice(host);
-    PHI_CHECK(device.externalId() == "aa:bb:cc:dd:ee:ff");
-    PHI_CHECK(device.name() == "phone");
-    PHI_CHECK(v1::hasFlag(device.flags(), v1::DeviceFlag::Wireless));
+    // A cable is a band the box does name.
+    HostEntry receiver;
+    receiver.mac = "00:09:b0:b5:0a:2b";
+    receiver.ip = "fd00::32";
+    receiver.interfaceType = "Ethernet";
+    receiver.active = true;
+    const sdk::NetworkClientSighting wired = sightingFor(receiver);
+    PHI_CHECK(wired.band == v1::WifiBand::Wired);
+    PHI_CHECK(wired.ipv6 == "fd00::32");
+    PHI_CHECK(wired.ipv4.empty());
+}
 
-    HostEntry wired = host;
-    wired.interfaceType = "Ethernet";
-    PHI_CHECK(!v1::hasFlag(buildHostDevice(wired).flags(), v1::DeviceFlag::Wireless));
+void testATrackedHostKeepsItsDeviceId()
+{
+    // The host-list document, through the tracker: the device a tracked client
+    // becomes has the id the presence devices of this adapter always had, the
+    // lower-case MAC with colons - existing devices in core stay theirs.
+    const char *document =
+        R"(<List><Item><MACAddress>AA:BB:CC:DD:EE:FF</MACAddress><IPAddress>192.168.1.55</IPAddress>)"
+        R"(<Active>1</Active><HostName>phone</HostName><InterfaceType>802.11</InterfaceType>)"
+        R"(<SignalStrength>-61</SignalStrength></Item>)"
+        R"(<Item><MACAddress>00:09:B0:B5:0A:2B</MACAddress><Active>1</Active>)"
+        R"(<HostName>Pioneer</HostName><InterfaceType>Ethernet</InterfaceType></Item></List>)";
+    std::vector<sdk::NetworkClientSighting> seen;
+    for (const HostEntry &host : parseHostList(document))
+        seen.push_back(sightingFor(host));
+    PHI_CHECK(seen.size() == 2);
 
-    // No signal, no RSSI channel.
-    PHI_CHECK(buildHostChannels(host, false).size() == 1);
-    HostEntry wifi = host;
-    wifi.hasSignal = true;
-    wifi.signalDbm = -58;
-    PHI_CHECK(buildHostChannels(wifi, false).size() == 2);
-    // Asleep or away, a wireless host keeps its RSSI channel: Online says it is gone.
-    PHI_CHECK(buildHostChannels(host, true).size() == 2);
-    // The same device whether the signal is in this poll or not.
-    PHI_CHECK(hostFingerprint(host, true) == hostFingerprint(wifi, true));
+    std::vector<std::string> deviceIds;
+    std::vector<std::string> candidateIds;
+    std::map<std::string, v1::ScalarValue> values;
+    bool offersAccess = false;
+    sdk::ClientTracker tracker;
+    tracker.setSink({
+        [&](const v1::Device &device, const v1::ChannelList &channels) {
+            deviceIds.push_back(device.externalId());
+            for (const v1::Channel &channel : channels)
+                offersAccess |= channel.externalId() == sdk::kClientChannelNetworkAccess;
+        },
+        [&](const std::string &device, const std::string &channel, const v1::ScalarValue &value) {
+            values[device + "/" + channel] = value;
+        },
+        [&](const v1::DeviceCandidate &candidate) { candidateIds.push_back(candidate.id()); },
+        {},
+        {},
+    });
+    tracker.update(seen, 1000);
+    PHI_CHECK_MSG(deviceIds.empty(), "an untracked client became a device");
+
+    tracker.listCandidates(60000, 1000);
+    PHI_CHECK_MSG(candidateIds.size() == 2, "%d candidates", int(candidateIds.size()));
+
+    PHI_CHECK(tracker.track("AA-BB-CC-DD-EE-FF", 2000));
+    PHI_CHECK_MSG(deviceIds.size() == 1 && deviceIds.front() == "aa:bb:cc:dd:ee:ff",
+                  "device id '%s'", deviceIds.empty() ? "" : deviceIds.front().c_str());
+    PHI_CHECK(!offersAccess);
+    tracker.update(seen, 3000);
+    const auto presence = values.find(std::string("aa:bb:cc:dd:ee:ff/") + sdk::kClientChannelPresence);
+    PHI_CHECK(presence != values.end() && std::get<bool>(presence->second));
+}
+
+void testClientsArePickedUnderAddDevice()
+{
+    // No picker in the form any more: the instance form carries the tracker's
+    // settings, and the clients are a pairing listing.
+    const v1::AdapterCapabilities caps = capabilities();
+    PHI_CHECK(v1::hasFlag(caps.flags(), v1::AdapterCapability::NetworkClients));
+    PHI_CHECK(v1::hasFlag(caps.pairingStyles(), v1::PairingStyle::Listing));
+
+    const v1::AdapterConfigSchema schema = configSchema();
+    bool sawAway = false, sawGuests = false, sawPrivate = false;
+    for (const v1::AdapterConfigField &field : schema.instance().fields()) {
+        sawAway |= field.key() == sdk::kClientMetaAwayDelayS;
+        sawGuests |= field.key() == sdk::kClientMetaShowGuests;
+        sawPrivate |= field.key() == sdk::kClientMetaIgnorePrivateMacs;
+    }
+    PHI_CHECK(sawAway && sawGuests && sawPrivate);
+    PHI_CHECK_MSG(schema.instance().fields().size() == 3, "%d instance fields",
+                  int(schema.instance().fields().size()));
 }
 
 void testWhereTheProbeGetsItsValues()
@@ -226,31 +305,6 @@ void testWhereTheProbeGetsItsValues()
     PHI_CHECK(!probeTargetFromParams(parseObject(R"({"ip":"h","flags":56})")).useTls);
 }
 
-void testThePickerNeverLosesASelection()
-{
-    const Json knownHosts = parseObject(R"({"hosts": [
-            {"mac": "AA:BB:CC:DD:EE:FF", "name": "phone", "ip": "192.168.1.5"},
-            {"mac": "11:22:33:44:55:66", "ip": "192.168.1.6"},
-            {"mac": "77:88:99:AA:BB:CC"}
-        ]})").at("hosts");
-    const std::vector<std::string> tracked = {"aa:bb:cc:dd:ee:ff", "de:ad:be:ef:00:01"};
-
-    const v1::AdapterConfigOptionList options = buildTrackedOptions(knownHosts, tracked);
-    PHI_CHECK_MSG(options.size() == 4, "%d options, expected 4", int(options.size()));
-    if (options.size() != 4)
-        return;
-    PHI_CHECK(options[0].value() == "aa:bb:cc:dd:ee:ff");
-    PHI_CHECK(options[0].label() == "phone (192.168.1.5)");
-    PHI_CHECK(options[1].label() == "192.168.1.6");
-    PHI_CHECK(options[2].label() == "77:88:99:aa:bb:cc");
-    // A tracked address the router no longer lists is still selectable, or the
-    // selection looks like it cleared itself.
-    PHI_CHECK_MSG(options[3].value() == "de:ad:be:ef:00:01",
-                  "a tracked address dropped out of the picker");
-
-    PHI_CHECK(buildTrackedOptions(Json::array(), {}).empty());
-}
-
 } // namespace
 
 int main()
@@ -259,8 +313,9 @@ int main()
     testTheRateComesFromTwoSamples();
     testWhatTheRouterTurnsOutToImplement();
     testAChannelThisRouterCannotFillIsNotOffered();
-    testADeviceIsNotReannouncedForGoingOffline();
+    testAHostBecomesASighting();
+    testATrackedHostKeepsItsDeviceId();
+    testClientsArePickedUnderAddDevice();
     testWhereTheProbeGetsItsValues();
-    testThePickerNeverLosesASelection();
     return phi::testing::report("fritz_behaviour_tests");
 }

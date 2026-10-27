@@ -1,18 +1,14 @@
 #include "fritz_schema.h"
 
-#include <algorithm>
-#include <set>
-#include <string>
 #include <utility>
-#include <vector>
 
-#include "phi/runtime/str.h"
+#include "phi/adapter/sdk/network_clients.h"
 
 #include "fritz_tr064.h"
 
 namespace phicore::fritz::ipc {
 
-namespace str = phi::str;
+namespace sdk = phicore::adapter::sdk;
 namespace v1 = phicore::adapter::v1;
 
 namespace {
@@ -56,66 +52,22 @@ v1::AdapterConfigSchema buildFritzConfigSchema()
     poll.layout().setControlWidth(v1::AdapterConfigSize::Narrow);
     v1::AdapterConfigField retry = field("retryIntervalMs", Type::Integer, "Retry interval", std::int64_t{10000});
     retry.layout().setControlWidth(v1::AdapterConfigSize::Narrow);
-    factory.setFields({host, port, user, password, poll, retry});
+    v1::AdapterConfigFieldList factoryFields{host, port, user, password, poll, retry};
+    for (v1::AdapterConfigField &clientField : sdk::ClientTracker::configFields())
+        factoryFields.push_back(std::move(clientField));
+    factory.setFields(std::move(factoryFields));
 
-    // One list that can grow long: above its full width, the probe below it.
+    // Which clients are tracked is picked under Add device (pairing style
+    // Listing), not here; what is left is how they are tracked.
     v1::AdapterConfigSection &instance = schema.instance();
     instance.setTitle("FRITZ!Box");
-    instance.setDescription("Connect via TR-064 to track network clients.");
-    v1::AdapterConfigField tracked = field("trackedMacs", Type::Select, "Tracked devices", {});
-    tracked.setParentActionId("settings");
-    tracked.setFlags(Flag::Multi | Flag::InstanceOnly);
-    tracked.addAction("browseHosts", "Probe WLAN");
-    tracked.layout().setLabelPosition(v1::AdapterConfigLabelPosition::Top);
-    tracked.layout().setActionPosition(v1::AdapterConfigActionPosition::Below);
-    instance.setFields({tracked});
+    instance.setDescription("Connect via TR-064 to track network clients. Clients are added under "
+                            "Add device, Network clients.");
+    instance.setFields(sdk::ClientTracker::configFields());
     return schema;
 }
 
 } // namespace
-
-v1::AdapterConfigOptionList buildTrackedOptions(const Json &knownHosts, const std::vector<std::string> &trackedMacs)
-{
-    v1::AdapterConfigOptionList options;
-    std::set<std::string> seen;
-
-    const auto add = [&options, &seen](const std::string &mac, const std::string &label) {
-        if (mac.empty() || seen.count(mac))
-            return;
-        seen.insert(mac);
-        options.push_back({mac, label.empty() ? mac : label});
-    };
-
-    if (knownHosts.is_array()) {
-        for (const Json &entry : knownHosts) {
-            if (entry.is_string()) {
-                const std::string mac = normalizeMac(entry.get<std::string>());
-                add(mac, mac);
-                continue;
-            }
-            if (!entry.is_object())
-                continue;
-            const std::string mac = normalizeMac(jsonString(entry, "mac"));
-            const std::string name = str::trimmed(jsonString(entry, "name"));
-            const std::string ip = str::trimmed(jsonString(entry, "ip"));
-            std::string label;
-            if (!ip.empty() && !name.empty())
-                label = name + " (" + ip + ")";
-            else if (!ip.empty())
-                label = ip;
-            else if (!name.empty())
-                label = name;
-            add(mac, label);
-        }
-    }
-
-    // A tracked address the router no longer lists still has to be selectable,
-    // or the selection appears to have cleared itself.
-    for (const std::string &mac : trackedMacs)
-        add(normalizeMac(mac), {});
-
-    return options;
-}
 
 v1::Utf8String displayName()
 {
@@ -139,16 +91,10 @@ v1::AdapterCapabilities capabilities()
     caps.setTopologies(v1::Topology::Local);
     caps.setFlags(v1::AdapterCapability::SupportsDiscovery
         | v1::AdapterCapability::SupportsProbe
-        | v1::AdapterCapability::RequiresPolling);
-
-    v1::AdapterActionDescriptor browse("browseHosts", "Probe WLAN", "Fetch current WLAN/LAN clients");
-    browse.setPlacement(v1::AdapterActionPlacement::Field);
-    caps.addInstanceAction(browse);
-
-    v1::AdapterActionDescriptor settings("settings", "Settings", "Edit tracked devices.");
-    settings.setHasForm(true);
-    settings.setLoadFormOnOpen(true);
-    caps.addInstanceAction(settings);
+        | v1::AdapterCapability::RequiresPolling
+        | v1::AdapterCapability::NetworkClients);
+    // The router's host table is the candidate list; nothing opens.
+    caps.setPairingStyles(v1::PairingStyle::Listing);
 
     v1::AdapterActionDescriptor probe("probe", "Test connection", "Reachability and credentials check");
     caps.addFactoryAction(probe);

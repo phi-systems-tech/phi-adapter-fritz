@@ -4,12 +4,13 @@
 #include <chrono>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
-#include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "phi/adapter/sdk/network_clients.h"
 #include "phi/adapter/sdk/reachability.h"
 
 #include "phi/runtime/loop.h"
@@ -38,8 +39,8 @@ namespace {
 /// How many fast polls go by before the things that change by the month are
 /// asked for again: the WLAN switches, the firmware version, the update state.
 constexpr int kSlowPollEvery = 12;
-// What the last WLAN probe listed, in the instance's state directory.
-constexpr const char kKnownHostsFile[] = "known-hosts.json";
+// What the ClientTracker has seen, in the instance's state directory.
+constexpr const char kClientsFile[] = "clients.txt";
 
 /// Three failed polls before connectivity is called lost.
 
@@ -53,7 +54,7 @@ std::vector<std::string> macList(const Json &value)
 {
     std::vector<std::string> macs;
     const auto append = [&macs](const std::string &raw) {
-        const std::string mac = normalizeMac(raw);
+        const std::string mac = sdk::ClientTracker::normalizedMac(raw);
         if (mac.empty() || std::find(macs.begin(), macs.end(), mac) != macs.end())
             return;
         macs.push_back(mac);
@@ -84,6 +85,25 @@ protected:
         }
         m_session.emplace(*m_loop);
         m_shots.emplace(*m_loop);
+        m_tracker.setSink({
+            [this](const v1::Device &device, const v1::ChannelList &channels) {
+                v1::Utf8String error;
+                if (!sendDeviceUpdated(device, channels, &error))
+                    log(sdk::LogLevel::Error, sdk::LogCategory::Internal,
+                        "failed to send deviceUpdated(%1): %2", {device.externalId(), error});
+            },
+            [this](const std::string &device, const std::string &channel, const v1::ScalarValue &value) {
+                sendChannelStateUpdated(device, channel, value, nowMs());
+            },
+            [this](const v1::DeviceCandidate &candidate) { sendDeviceCandidateUpdated(candidate); },
+            [this](const std::string &id) { sendDeviceCandidateRemoved(id); },
+            [this](const std::string &state) {
+                v1::Utf8String error;
+                if (!writeStateFile(kClientsFile, state, &error))
+                    log(sdk::LogLevel::Warn, sdk::LogCategory::Internal, "clients not saved: %1", {error});
+            },
+        });
+        m_tracker.restore(readStateFile(kClientsFile).value_or(std::string()));
         m_lifecycle = Lifecycle::Running;
         setConnected(false);
         // Nothing to poll until the first config.changed says where the router
@@ -111,6 +131,7 @@ protected:
             m_session->cancel();
         answerPending("Instance disconnected");
         m_reported.forget();
+        m_tracker.forgetReported();
         m_txMeter.forget();
         m_rxMeter.forget();
         m_router.forget();
@@ -133,6 +154,7 @@ protected:
             // this one, and neither does its byte counter.
             m_capabilities.forget();
             m_reported.forget();
+            m_tracker.forgetReported();
             m_txMeter.forget();
             m_rxMeter.forget();
             m_routerAnnounced = false;
@@ -143,8 +165,8 @@ protected:
         m_router.forget();
         m_pollsSinceSlow = kSlowPollEvery;   // the first poll asks for everything
 
-        log(sdk::LogLevel::Debug, sdk::LogCategory::Config, "router at %1, %2 hosts tracked",
-            {m_info.externalId(), static_cast<std::int64_t>(m_trackedMacs.size())});
+        log(sdk::LogLevel::Debug, sdk::LogCategory::Config, "router at %1, %2 clients tracked",
+            {m_info.externalId(), static_cast<std::int64_t>(m_tracker.tracked().size())});
 
         armPollTimer();
         beginPoll();
@@ -208,16 +230,42 @@ protected:
 
     void onAdapterActionInvoke(const sdk::AdapterActionInvokeRequest &request) override
     {
-        const std::string actionId = str::trimmed(request.actionId());
-        if (actionId == "settings") {
-            handleSettings(request);
-            return;
-        }
-        if (actionId == "browseHosts") {
-            handleBrowseHosts(request);
-            return;
-        }
         answerAction(request.cmdId(), v1::CmdStatus::NotSupported, "Adapter action not supported");
+    }
+
+    void onPairingStart(const sdk::PairingStartRequest &request) override
+    {
+        // Listing: nothing opens. What the tracker already knows is offered at
+        // once, and again after the router's whole table has been read - the
+        // only time it is, because the poll asks for the tracked clients only.
+        const std::int64_t expiresInMs = std::int64_t{request.durationS()} * 1000;
+        m_tracker.listCandidates(expiresInMs, nowMs());
+        answerCommand(request.cmdId(), v1::CmdStatus::Success, {});
+        readHostTable(expiresInMs);
+    }
+
+    void onPairingStop(const sdk::PairingStopRequest &request) override
+    {
+        answerCommand(request.cmdId(), v1::CmdStatus::Success, {});
+    }
+
+    void onPairCandidate(const sdk::PairCandidateRequest &request) override
+    {
+        if (!m_tracker.track(request.candidateId(), nowMs())) {
+            answerCommand(request.cmdId(), v1::CmdStatus::InvalidArgument,
+                          "This FRITZ!Box has not seen that client");
+            return;
+        }
+        answerCommand(request.cmdId(), v1::CmdStatus::Success, {});
+        saveTracked();
+        sendPairingProgress(request.pairingId(), v1::PairingStage::Done, 100, {},
+                            sdk::ClientTracker::normalizedMac(request.candidateId()));
+    }
+
+    void onDeviceRemoved(const sdk::DeviceRemovedRequest &request) override
+    {
+        if (m_tracker.untrack(request.deviceExternalId()))
+            saveTracked();
     }
 
     void onDeviceNameUpdate(const sdk::DeviceNameUpdateRequest &request) override
@@ -252,9 +300,19 @@ private:
         m_port = configured > 0 ? configured
                                 : (discovered > 0 ? discovered : kDefaultTr064Port);
 
-        m_trackedMacs.clear();
-        if (m_meta.contains("trackedMacs"))
-            m_trackedMacs = macList(m_meta.at("trackedMacs"));
+        sdk::ClientTracker::Settings clients;
+        clients.awayDelayMs =
+            std::int64_t{std::clamp(jsonInt(m_meta, sdk::kClientMetaAwayDelayS, 300), 0, 3600)} * 1000;
+        clients.showGuests = jsonBool(m_meta, sdk::kClientMetaShowGuests);
+        clients.ignorePrivateMacs = jsonBool(m_meta, sdk::kClientMetaIgnorePrivateMacs);
+        // TR-064 has a host filter that could block a client, but this adapter
+        // has never issued it and it is untested against the box in the field:
+        // no NetworkAccess switch until it is.
+        clients.canBlock = false;
+        m_tracker.setSettings(clients);
+        m_tracker.setTracked(m_meta.contains(sdk::kClientMetaTracked)
+                                 ? macList(m_meta.at(sdk::kClientMetaTracked))
+                                 : std::vector<std::string>{});
 
         if (m_session) {
             m_session->setEndpoint(endpoint());
@@ -345,14 +403,16 @@ private:
         m_pollAnswered = false;
         m_pollError.clear();
         m_snapshot = RouterSnapshot{};
+        m_sightings.clear();
+        m_sightingsComplete = true;
 
         // Reachability, uptime, and - once a minute - the firmware version.
         m_steps.push_back([this]() { stepDeviceInfo(); });
 
-        // One small question per tracked device, instead of the router's whole
+        // One small question per tracked client, instead of the router's whole
         // host table. On the box in the field that is three answers of about
         // 500 bytes against 110 separate SOAP calls, twelve times a minute.
-        for (const std::string &mac : m_trackedMacs)
+        for (const std::string &mac : m_tracker.tracked())
             m_steps.push_back([this, mac]() { stepHost(mac); });
 
         if (m_capabilities.worthTrying(Feature::ByteCounters)) {
@@ -421,6 +481,10 @@ private:
             // semantics to one whose type it has not seen yet; neither reaches
             // the adapter, because the send itself succeeded.
             announceRouter();
+            // A host that could not be asked is not a host that left: such a
+            // poll hands the tracker nothing.
+            if (m_sightingsComplete)
+                m_tracker.update(m_sightings, nowMs());
         } else {
             noteFailure(m_pollError);
         }
@@ -485,17 +549,15 @@ private:
                                            m_pollAnswered = true;
                                            HostEntry entry;
                                            if (parseHostEntry(reply.payload, mac, &entry))
-                                               publishHost(entry);
-                                       } else if (!reply.invalidAction) {
-                                           // The router knows the action; this
-                                           // address is simply not in its table
-                                           // any more. The device stays, showing
-                                           // offline - removing it would take
-                                           // its room and its history with it.
-                                           report(mac, kChannelOnline,
-                                                  static_cast<std::int64_t>(
-                                                      v1::ConnectivityStatus::Disconnected));
+                                               m_sightings.push_back(sightingFor(entry));
+                                       } else if (faultDescription(reply.payload).empty()) {
+                                           // No answer at all, not "no such
+                                           // entry": nothing is known about it.
+                                           m_sightingsComplete = false;
                                        }
+                                       // A fault is the router saying the
+                                       // address is not in its table any more:
+                                       // unseen, and gone after the away delay.
                                        runStep();
                                    }));
     }
@@ -677,32 +739,6 @@ private:
         m_reported.forgetValues(kRouterDeviceId);
     }
 
-    void publishHost(const HostEntry &host)
-    {
-        if (host.mac.empty())
-            return;
-        if (host.hasSignal && m_wirelessHosts.insert(host.mac).second)
-            saveState();
-        const bool wireless = m_wirelessHosts.count(host.mac) > 0;
-        if (m_reported.descriptorIsNews(host.mac, hostFingerprint(host, wireless))) {
-            v1::Utf8String error;
-            if (!sendDeviceUpdated(buildHostDevice(host), buildHostChannels(host, wireless), &error)) {
-                log(sdk::LogLevel::Error, sdk::LogCategory::Internal,
-                    "failed to send deviceUpdated(host): %1", {error});
-            } else {
-                // A host that just grew an RSSI channel is the same case as the
-                // router growing one: what was recorded as reported was never
-                // accepted.
-                m_reported.forgetValues(host.mac);
-            }
-        }
-        report(host.mac, kChannelOnline,
-               static_cast<std::int64_t>(host.active ? v1::ConnectivityStatus::Connected
-                                                     : v1::ConnectivityStatus::Disconnected));
-        if (host.hasSignal)
-            report(host.mac, kChannelRssi, static_cast<double>(host.signalDbm));
-    }
-
     /**
      * @brief The same "only if it is news" rule for a composite value.
      *
@@ -789,91 +825,59 @@ private:
 
     // --- the actions ------------------------------------------------------
 
-    void handleSettings(const sdk::AdapterActionInvokeRequest &request)
-    {
-        const Json params = parseObject(request.paramsJson());
-        if (params.contains("trackedMacs")) {
-            m_meta["trackedMacs"] = macList(params.at("trackedMacs"));
-            m_info.setMetaJson(dump(m_meta));
-            applyConfig();
-            v1::Utf8String error;
-            if (!sendAdapterMetaUpdated({{"trackedMacs", trackedList()}}, &error))
-                log(sdk::LogLevel::Error, sdk::LogCategory::Internal,
-                    "failed to send adapterMetaUpdated(settings): %1", {error});
-        }
-
-        answerAction(request.cmdId(), v1::CmdStatus::Success, {}, formValues(), fieldChoices());
-
-        if (m_lifecycle == Lifecycle::Running) {
-            armPollTimer();
-            m_pollsSinceSlow = kSlowPollEvery;
-            beginPoll();
-        }
-    }
-
     /**
-     * @brief The host picker: the router's whole table, once, on request.
+     * @brief The router's whole host table, once, for the candidate list.
      *
-     * The only place the full list is needed, and the reason the poll no longer
-     * fetches it. `X_AVM-DE_GetHostListPath` is asked for first because it is
-     * the one this firmware has; the standard name comes back Invalid Action,
-     * and the fallback below - one call per host - is what the poll used to do
-     * every five seconds.
+     * `X_AVM-DE_GetHostListPath` is asked for first because it is the one this
+     * firmware has; the standard name comes back Invalid Action, and the
+     * fallback below - one call per host - is what the poll used to do every
+     * five seconds.
      */
-    void handleBrowseHosts(const sdk::AdapterActionInvokeRequest &request)
+    void readHostTable(std::int64_t expiresInMs)
     {
-        if (m_lifecycle != Lifecycle::Running || !m_session || !m_session->addressable()) {
-            answerAction(request.cmdId(), v1::CmdStatus::TemporarilyOffline, "Host/IP is required");
+        if (m_lifecycle != Lifecycle::Running || !m_session || !m_session->addressable())
             return;
-        }
         m_session->cancel();
         m_pollRunning = false;
 
-        const v1::CmdId cmdId = request.cmdId();
-        const char *action = m_capabilities.worthTrying(Feature::AvmHostListPath)
-            ? "X_AVM-DE_GetHostListPath"
-            : "GetHostListPath";
-        const Feature feature = m_capabilities.worthTrying(Feature::AvmHostListPath)
-            ? Feature::AvmHostListPath
-            : Feature::StandardHostListPath;
+        const bool avm = m_capabilities.worthTrying(Feature::AvmHostListPath);
+        const char *action = avm ? "X_AVM-DE_GetHostListPath" : "GetHostListPath";
+        const Feature feature = avm ? Feature::AvmHostListPath : Feature::StandardHostListPath;
 
-        m_session->call(kHosts, action, {}, [this, cmdId, feature](Tr064Session::Reply reply) {
+        m_session->call(kHosts, action, {}, [this, expiresInMs, feature](Tr064Session::Reply reply) {
             std::string path;
             if (reply.ok && (soapValue(reply.payload, "NewX_AVM-DE_HostListPath", &path)
                              || soapValue(reply.payload, "NewHostListPath", &path))
                 && !path.empty()) {
                 m_capabilities.markPresent(feature);
-                fetchHostList(cmdId, path);
+                fetchHostList(expiresInMs, path);
                 return;
             }
             if (reply.invalidAction)
                 m_capabilities.markAbsent(feature);
-            enumerateHosts(cmdId);
+            enumerateHosts(expiresInMs);
         });
     }
 
-    void fetchHostList(v1::CmdId cmdId, const std::string &path)
+    void fetchHostList(std::int64_t expiresInMs, const std::string &path)
     {
-        m_session->get(path, [this, cmdId](Tr064Session::Reply reply) {
-            if (!reply.ok) {
-                enumerateHosts(cmdId);
-                return;
-            }
-            std::vector<HostEntry> hosts = parseHostList(reply.payload);
+        m_session->get(path, [this, expiresInMs](Tr064Session::Reply reply) {
+            std::vector<HostEntry> hosts = reply.ok ? parseHostList(reply.payload)
+                                                    : std::vector<HostEntry>{};
             if (hosts.empty()) {
-                enumerateHosts(cmdId);
+                enumerateHosts(expiresInMs);
                 return;
             }
-            completeBrowse(cmdId, hosts);
+            completeHostTable(expiresInMs, hosts, true);
         });
     }
 
     /// One call per host. Slow, and only reached when the router has no list
     /// document to offer.
-    void enumerateHosts(v1::CmdId cmdId)
+    void enumerateHosts(std::int64_t expiresInMs)
     {
         m_session->call(kHosts, "GetHostNumberOfEntries", {},
-                        [this, cmdId](Tr064Session::Reply reply) {
+                        [this, expiresInMs](Tr064Session::Reply reply) {
                             std::string value;
                             int total = 0;
                             if (reply.ok && soapValue(reply.payload, "NewHostNumberOfEntries",
@@ -884,100 +888,64 @@ private:
                                     total = 0;
                             }
                             auto hosts = std::make_shared<std::vector<HostEntry>>();
-                            enumerateHostAt(cmdId, 0, total, hosts);
+                            enumerateHostAt(expiresInMs, 0, total, reply.ok, hosts);
                         });
     }
 
-    void enumerateHostAt(v1::CmdId cmdId, int index, int total,
+    void enumerateHostAt(std::int64_t expiresInMs, int index, int total, bool complete,
                          std::shared_ptr<std::vector<HostEntry>> hosts)
     {
         if (index >= total || m_lifecycle != Lifecycle::Running || !m_session) {
-            completeBrowse(cmdId, *hosts);
+            completeHostTable(expiresInMs, *hosts, complete && index >= total);
             return;
         }
         m_session->call(kHosts, "GetGenericHostEntry", {{"NewIndex", str::number(index)}},
-                        [this, cmdId, index, total, hosts](Tr064Session::Reply reply) {
+                        [this, expiresInMs, index, total, complete,
+                         hosts](Tr064Session::Reply reply) {
                             if (reply.ok) {
                                 HostEntry entry;
                                 if (parseHostEntry(reply.payload, {}, &entry)
                                     && !entry.mac.empty())
                                     hosts->push_back(std::move(entry));
                             }
-                            enumerateHostAt(cmdId, index + 1, total, hosts);
+                            enumerateHostAt(expiresInMs, index + 1, total, complete && reply.ok,
+                                            hosts);
                         });
     }
 
-    void completeBrowse(v1::CmdId cmdId, const std::vector<HostEntry> &hosts)
+    /// `complete`: every host the router has is in `hosts`. Only then is it a
+    /// snapshot the tracker may take as the whole network; a partial table
+    /// would start the away delay of every tracked client it missed.
+    void completeHostTable(std::int64_t expiresInMs, const std::vector<HostEntry> &hosts,
+                           bool complete)
     {
-        std::map<std::string, Json> known;
-        const Json stored = knownHosts();
-        if (stored.is_array()) {
-            for (const Json &entry : stored) {
-                if (!entry.is_object())
-                    continue;
-                const std::string mac = normalizeMac(jsonString(entry, "mac"));
-                if (!mac.empty())
-                    known[mac] = entry;
-            }
+        if (complete) {
+            std::vector<sdk::NetworkClientSighting> seen;
+            seen.reserve(hosts.size());
+            for (const HostEntry &host : hosts)
+                seen.push_back(sightingFor(host));
+            m_tracker.update(seen, nowMs());
         }
-
-        for (const HostEntry &host : hosts) {
-            if (host.mac.empty())
-                continue;
-            Json merged = known.count(host.mac) ? known[host.mac] : Json::object();
-            merged["mac"] = host.mac;
-            if (!host.name.empty())
-                merged["name"] = host.name;
-            if (!host.ip.empty())
-                merged["ip"] = host.ip;
-            known[host.mac] = merged;
-        }
-        // A selection never silently vanishes because a device dropped off.
-        for (const std::string &mac : m_trackedMacs) {
-            if (known.count(mac))
-                continue;
-            Json entry = Json::object();
-            entry["mac"] = mac;
-            known[mac] = entry;
-        }
-
-        // The hosts are the adapter's own record of what the router listed:
-        // kept in its state directory, not in the meta every client receives.
-        Json hostList = Json::array();
-        for (const auto &[mac, entry] : known)
-            hostList.push_back(entry);
-        v1::Utf8String error;
-        if (!writeStateFile(kKnownHostsFile, dump(Json{{"hosts", hostList}}), &error))
-            log(sdk::LogLevel::Error, sdk::LogCategory::Database,
-                "the known hosts could not be written: %1", {error});
-
         log(sdk::LogLevel::Info, sdk::LogCategory::Discovery,
-            "browsed the hosts: %1 seen, %2 known, %3 tracked",
-            {static_cast<std::int64_t>(hosts.size()), static_cast<std::int64_t>(known.size()),
-             static_cast<std::int64_t>(m_trackedMacs.size())});
-
-        answerAction(cmdId, v1::CmdStatus::Success, {}, formValues(), fieldChoices());
+            "read the host table: %1 hosts, %2 tracked%3",
+            {static_cast<std::int64_t>(hosts.size()),
+             static_cast<std::int64_t>(m_tracker.tracked().size()),
+             v1::Utf8String(complete ? "" : " (incomplete, not used)")});
+        m_tracker.listCandidates(expiresInMs, nowMs());
     }
 
-    v1::ScalarList trackedList() const
+    /// The tracker's picks back into the adapter meta, where the next
+    /// config.changed brings them from.
+    void saveTracked()
     {
         v1::ScalarList tracked;
-        for (const std::string &mac : m_trackedMacs)
+        for (const std::string &mac : m_tracker.tracked())
             tracked.emplace_back(mac);
-        return tracked;
-    }
-
-    v1::AdapterFormValues formValues() const { return {{"trackedMacs", trackedList()}}; }
-
-    Json knownHosts() const
-    {
-        const Json stored = parseObject(readStateFile(kKnownHostsFile).value_or(std::string()));
-        return stored.contains("hosts") ? stored.at("hosts") : Json::array();
-    }
-
-    v1::AdapterFieldChoicesList fieldChoices() const
-    {
-        return {{"trackedMacs", buildTrackedOptions(knownHosts(), m_trackedMacs)}};
+        m_meta[sdk::kClientMetaTracked] = m_tracker.tracked();
+        v1::Utf8String error;
+        if (!sendAdapterMetaUpdated({{sdk::kClientMetaTracked, tracked}}, &error))
+            log(sdk::LogLevel::Error, sdk::LogCategory::Internal,
+                "failed to send adapterMetaUpdated(trackedClients): %1", {error});
     }
 
     // --- answering --------------------------------------------------------
@@ -1001,16 +969,9 @@ private:
         sendCommandResponse(responseFor(cmdId, status, error));
     }
 
-    void answerAction(v1::CmdId cmdId, v1::CmdStatus status, const std::string &error,
-                      v1::AdapterFormValues formValues = {},
-                      v1::AdapterFieldChoicesList fieldChoices = {})
+    void answerAction(v1::CmdId cmdId, v1::CmdStatus status, const std::string &error)
     {
         auto response = v1::ActionResponse().setId(cmdId).setTsMs(nowMs()).setStatus(status).setError(error);
-        if (!formValues.empty()) {
-            response.setFormValues(std::move(formValues));
-            response.setFieldChoices(std::move(fieldChoices));
-            response.setReloadLayout(true);
-        }
         v1::Utf8String sendError;
         if (!sendResult(response, &sendError))
             log(sdk::LogLevel::Error, sdk::LogCategory::Internal, "failed to send the result: %1",
@@ -1050,21 +1011,18 @@ private:
 
     v1::Adapter m_info;
     Json m_meta = Json::object();
-    std::vector<std::string> m_trackedMacs;
+    sdk::ClientTracker m_tracker;
     std::uint16_t m_port = kDefaultTr064Port;
     int m_pollIntervalMs = 5000;
     int m_retryIntervalMs = 10000;
 
     RouterCapabilities m_capabilities;
-    // Hosts that have had a signal strength: their RSSI channel stays.
-    std::set<std::string> m_wirelessHosts;
 
-    // What this router could do and which hosts are wireless, kept for the
-    // endpoint across restarts: a report is never smaller after a start than
-    // before it (SDK README, "A Device's Channels").
+    // What this router could do, kept for the endpoint across restarts: a
+    // report is never smaller after a start than before it (SDK README, "A
+    // Device's Channels"). What the clients had is the tracker's own state.
     void restoreState()
     {
-        m_wirelessHosts.clear();
         const std::optional<std::string> saved = readStateFile("router.json");
         if (!saved)
             return;
@@ -1072,19 +1030,11 @@ private:
         if (jsonString(doc, "endpoint") != endpoint())
             return;
         m_capabilities.restorePresent(static_cast<unsigned>(jsonInt(doc, "present", 0)));
-        const auto hosts = doc.find("wirelessHosts");
-        if (hosts != doc.end() && hosts->is_array())
-            for (const Json &mac : *hosts)
-                if (mac.is_string())
-                    m_wirelessHosts.insert(mac.get<std::string>());
     }
 
     void saveState()
     {
-        Json hosts = Json::array();
-        for (const std::string &mac : m_wirelessHosts)
-            hosts.push_back(mac);
-        const Json doc = {{"endpoint", endpoint()}, {"present", m_capabilities.presentMask()}, {"wirelessHosts", hosts}};
+        const Json doc = {{"endpoint", endpoint()}, {"present", m_capabilities.presentMask()}};
         v1::Utf8String error;
         if (!writeStateFile("router.json", doc.dump(), &error))
             log(sdk::LogLevel::Warn, sdk::LogCategory::Internal, "router state not saved: %1", {error});
@@ -1093,6 +1043,10 @@ private:
     RateMeter m_txMeter;
     RateMeter m_rxMeter;
     RouterSnapshot m_snapshot;
+    /// The tracked clients this poll asked about, for the tracker at its end;
+    /// false once one of them could not be asked.
+    std::vector<sdk::NetworkClientSighting> m_sightings;
+    bool m_sightingsComplete = true;
 
     std::vector<std::function<void()>> m_steps;
     /// Channel values waiting for the descriptor of the poll that produced them.

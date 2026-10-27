@@ -2,22 +2,12 @@
 
 #include "phi/runtime/str.h"
 
-#include "fritz_json.h"
 
 namespace phicore::fritz::ipc {
 
 namespace str = phi::str;
+namespace sdk = phicore::adapter::sdk;
 namespace v1 = phicore::adapter::v1;
-
-namespace {
-
-bool looksWireless(const std::string &interfaceType)
-{
-    return str::containsIgnoreCase(interfaceType, "802.11")
-        || str::containsIgnoreCase(interfaceType, "wlan");
-}
-
-} // namespace
 
 v1::ChannelList buildRouterChannels(bool hasWlan24, bool hasWlan5, bool hasRates,
                                     bool hasUpdateState)
@@ -106,53 +96,21 @@ v1::Device buildRouterDevice(const std::string &name, const std::string &firmwar
     return device;
 }
 
-v1::Device buildHostDevice(const HostEntry &host)
+sdk::NetworkClientSighting sightingFor(const HostEntry &host)
 {
-    v1::Device device;
-    device.setExternalId(host.mac);
-    device.setName(host.name.empty() ? host.mac : host.name);
-    device.setDeviceClass(v1::DeviceClass::Sensor);
-    device.setManufacturer("AVM");
-    if (looksWireless(host.interfaceType))
-        device.setFlags(device.flags() | v1::DeviceFlag::Wireless);
-
-    device.setMac(host.mac);
+    sdk::NetworkClientSighting sighting;
+    sighting.mac = host.mac;
+    sighting.name = host.name;
     if (host.ip.find(':') != std::string::npos)
-        device.setIpv6(host.ip);
+        sighting.ipv6 = host.ip;
     else
-        device.setIpv4(host.ip);
-    Json meta = Json::object();
-    if (!host.interfaceType.empty())
-        meta["interfaceType"] = host.interfaceType;
-    device.setMetaJson(dump(meta));
-    return device;
-}
-
-v1::ChannelList buildHostChannels(const HostEntry &host, bool wireless)
-{
-    v1::ChannelList channels;
-
-    v1::Channel online;
-    online.setExternalId(kChannelOnline);
-    online.setName("Online");
-    online.setKind(v1::ChannelKind::ConnectivityStatus);
-    online.setDataType(v1::ChannelDataType::Enum);
-    online.setFlags(v1::kChannelFlagDefaultRead);
-    channels.push_back(std::move(online));
-
-    if (host.hasSignal || wireless) {
-        v1::Channel rssi;
-        rssi.setExternalId(kChannelRssi);
-        rssi.setName("RSSI");
-        rssi.setKind(v1::ChannelKind::SignalStrength);
-        rssi.setDataType(v1::ChannelDataType::Float);
-        rssi.setFlags(v1::kChannelFlagDefaultRead);
-        rssi.setUnit("dBm");
-        rssi.setRange(-100.0, 0.0);
-        channels.push_back(std::move(rssi));
-    }
-
-    return channels;
+        sighting.ipv4 = host.ip;
+    if (str::containsIgnoreCase(host.interfaceType, "ethernet"))
+        sighting.band = v1::WifiBand::Wired;
+    if (host.hasSignal)
+        sighting.rssiDbm = host.signalDbm;
+    sighting.online = host.active;
+    return sighting;
 }
 
 std::string routerFingerprint(const std::string &name, const std::string &firmware,
@@ -160,14 +118,6 @@ std::string routerFingerprint(const std::string &name, const std::string &firmwa
 {
     return name + "\x1f" + firmware + "\x1f" + (hasWlan24 ? "1" : "0")
         + (hasWlan5 ? "1" : "0") + (hasRates ? "1" : "0") + (hasUpdateState ? "1" : "0");
-}
-
-std::string hostFingerprint(const HostEntry &host, bool wireless)
-{
-    // Not `active`: that is a channel value, and a device whose descriptor
-    // changes every time it goes offline is a device announced twice a minute.
-    return host.mac + "\x1f" + host.name + "\x1f" + host.ip + "\x1f" + host.interfaceType
-        + "\x1f" + (host.hasSignal || wireless ? "1" : "0");
 }
 
 } // namespace phicore::fritz::ipc

@@ -34,9 +34,11 @@ Provides local network TR-064 integration for FRITZ!Box via IPC sidecar.
 - IPC sidecar executable using `phi-adapter-sdk`
 - Descriptor-driven config schema (`configSchema`) sent during bootstrap
 - Factory action `probe` (`Test connection`)
-- Instance actions `settings` and `browseHosts`
 - Router channels for uptime, update state, WLAN toggles, TX/RX rates
-- Tracked client devices with connectivity + RSSI updates
+- Network clients (SDK `ClientTracker`, capability `NetworkClients`, pairing
+  style `Listing`): the household picks clients under Add device, Network
+  clients; each becomes a `NetworkClient` device (id = its MAC) with Presence,
+  RSSI and, for a cable, Band
 
 ### Runtime Requirements
 
@@ -132,24 +134,30 @@ Split by how fast things actually change:
 - **Every twelfth poll** (a minute by default): the WLAN switches, the firmware
   version, the update state - things that change by the month.
 
-The router's full host table is fetched only by `browseHosts`, which is what
-fills the picker, and only when somebody presses it. The poll used to fetch it
+The router's full host table is fetched only when core asks for candidates
+(`cmd.pairing.start`, scope network clients); it is handed to the tracker and
+listed. A poll hands the tracker the tracked clients it asked about, and
+nothing when one of them could not be asked. The poll used to fetch it
 every five seconds and throw away everything that was not tracked; on the box
 in the field the list document was unreachable under the wrong action name, so
 what actually happened was `GetHostNumberOfEntries` followed by 110 separate
 `GetGenericHostEntry` calls - about 1300 SOAP requests a minute, measured at
 31 MB an hour, to keep three devices up to date.
 
-A user action - a WLAN switch, a settings save, a host browse - cancels a
+A user action - a WLAN switch, a candidate listing - cancels a
 running poll rather than queueing behind it. The next poll is five seconds away.
 
 ### Configuration
 
 - Factory scope: `host`, `tr064Port`, `user`, `password`, `pollIntervalMs`,
   `retryIntervalMs`
-- Instance scope: `trackedMacs`, filled by the `browseHosts` action
-- the hosts the picker offers are what `browseHosts` last listed, kept in the
-  instance's state directory (`known-hosts.json`), not in the adapter meta
+- Both scopes: the tracker's `awayDelayS`, `showGuestClients`,
+  `ignorePrivateMacs`
+- `trackedClients` in the adapter meta: written by the adapter when a client
+  is added under Add device or its device is deleted
+- what the tracker has seen is kept in the instance's state directory
+  (`clients.txt`), not in the adapter meta
+- No NetworkAccess switch: the TR-064 host filter is not used by this adapter
 
 ### Known Rough Edges
 
@@ -165,8 +173,8 @@ running poll rather than queueing behind it. The next poll is five seconds away.
 
 - Symptom: "Invalid credentials" — the router was reached and refused. TR-064
   needs a FRITZ!Box user with the "smart home and other permissions" right.
-- Symptom: nothing is tracked — no addresses are selected. Open Settings and
-  press "Probe WLAN", which fetches the host table and fills the picker.
+- Symptom: nothing is tracked — no client was added. Open Add device, Network
+  clients: the router's host table is read and its clients are listed.
 
 ### Maintainers
 
