@@ -42,7 +42,7 @@ HostEntry parseItem(std::string_view item)
 
 std::string normalizeMac(std::string_view mac)
 {
-    return str::toLower(str::trimmed(mac));
+    return str::normalizedMac(mac);
 }
 
 bool isTruthy(std::string_view value)
